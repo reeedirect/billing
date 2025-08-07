@@ -1942,7 +1942,7 @@ app.get('/api/query', async (req, res) => {
             // 如果是会话相关错误，清除登录状态
             if (queryError.message.includes('会话') || queryError.message.includes('认证') || queryError.message.includes('登录')) {
                 deleteUserSession(clientIP);
-                AuthSession.invalidate();
+                UserAuthSession.invalidate(clientIP);
                 
                 return res.status(401).json({
                     success: false,
