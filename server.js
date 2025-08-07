@@ -129,6 +129,9 @@ let authCookies = '';
 const userSessions = new Map(); // IP -> 登录会话信息
 const MAX_CONCURRENT_USERS = 5; // 最大同时登录用户数
 
+// 多用户认证会话管理 - 每个用户独立的认证会话
+const userAuthSessions = new Map(); // IP -> 认证会话信息
+
 // 获取客户端真实IP地址
 function getClientIP(req) {
     return req.headers['x-forwarded-for'] || 
@@ -147,6 +150,7 @@ function cleanupExpiredSessions() {
     for (const [ip, session] of userSessions.entries()) {
         if (now - session.lastActivity > EXPIRE_TIME) {
             userSessions.delete(ip);
+            userAuthSessions.delete(ip); // 同时清理认证会话
             console.log(`清理过期会话: ${ip}`);
         }
     }
@@ -177,6 +181,7 @@ function setUserSession(ip, sessionData) {
         
         if (oldestIP) {
             userSessions.delete(oldestIP);
+            userAuthSessions.delete(oldestIP); // 同时清理认证会话
             console.log(`达到最大用户数限制，移除最久未活动用户: ${oldestIP}`);
         }
     }
@@ -189,6 +194,7 @@ function setUserSession(ip, sessionData) {
 
 // 删除用户会话
 function deleteUserSession(ip) {
+    userAuthSessions.delete(ip); // 同时清理认证会话
     return userSessions.delete(ip);
 }
 
@@ -203,35 +209,65 @@ function hasAnyLoggedInUser() {
     return false;
 }
 
-// 全局会话状态管理
-const AuthSession = {
-    // 会话信息
-    cookies: '',
-    jsessionid: '',
-    lastUpdate: null,
-    isValid: false,
+// 用户认证会话管理
+const UserAuthSession = {
+    // 获取用户的认证会话
+    get(userIP) {
+        return userAuthSessions.get(userIP) || {
+            cookies: '',
+            jsessionid: '',
+            lastUpdate: null,
+            isValid: false
+        };
+    },
     
-    // 检查会话是否有效 - 通过发送测试请求验证
-    async isSessionValid() {
-        if (!this.cookies) {
-            console.log('会话信息不完整 - 缺少cookies');
+    // 保存用户的认证会话
+    save(userIP, cookies, jsessionid) {
+        const session = {
+            cookies: cookies,
+            jsessionid: jsessionid,
+            lastUpdate: Date.now(),
+            isValid: true
+        };
+        userAuthSessions.set(userIP, session);
+        
+        const saveTime = new Date(session.lastUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        console.log(`用户 ${userIP} 的认证会话已保存，保存时间: ${saveTime}`);
+    },
+    
+    // 使用户的认证会话失效
+    invalidate(userIP, silent = false) {
+        if (userAuthSessions.has(userIP)) {
+            userAuthSessions.delete(userIP);
+            if (!silent) {
+                console.log(`用户 ${userIP} 的认证会话已失效`);
+            }
+        }
+    },
+    
+    // 检查用户的认证会话是否有效
+    async isSessionValid(userIP) {
+        const session = this.get(userIP);
+        
+        if (!session.cookies) {
+            console.log(`用户 ${userIP} 会话信息不完整 - 缺少cookies`);
             return false;
         }
         
         try {
-            console.log('\n正在验证会话有效性...');
+            console.log(`\n正在验证用户 ${userIP} 的会话有效性...`);
             
             // 发送测试请求到电费查询页面
-            const testUrl = this.jsessionid ? 
-                `http://202.195.206.214/epay/electric/load4electricbill;jsessionid=${this.jsessionid}?elcsysid=2` :
+            const testUrl = session.jsessionid ? 
+                `http://202.195.206.214/epay/electric/load4electricbill;jsessionid=${session.jsessionid}?elcsysid=2` :
                 'http://202.195.206.214/epay/electric/load4electricbill?elcsysid=2';
             
-            console.log(`测试URL: ${testUrl}`);
+            console.log(`用户 ${userIP} 测试URL: ${testUrl}`);
             
             const testResponse = await axios.get(testUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Cookie': this.cookies,
+                    'Cookie': session.cookies,
                     'Referer': 'http://202.195.206.214/epay/'
                 },
                 timeout: 10000 // 10秒超时
@@ -243,75 +279,50 @@ const AuthSession = {
                 const $ = cheerio.load(testResponse.data);
                 const title = $('title').text();
                 
-                console.log(`测试页面标题: ${title}`);
+                console.log(`用户 ${userIP} 测试页面标题: ${title}`);
                 
                 // 如果页面标题包含"充值页面"或"电费"等关键词，说明会话有效
                 if (title.includes('充值页面') || title.includes('电费') || title.includes('一卡通')) {
-                    console.log('✅ 会话验证成功 - 页面正常访问');
-                    this.isValid = true;
+                    console.log(`✅ 用户 ${userIP} 会话验证通过`);
                     return true;
-                } else if (title.includes('登录') || title.includes('认证')) {
-                    console.log('❌ 会话已失效 - 被重定向到登录页面');
-                    this.invalidate(true); // 静默失效，因为已经输出了具体错误信息
-                    return false;
                 } else {
-                    console.log(`⚠️ 会话状态不明确 - 页面标题: ${title}`);
-                    this.invalidate(true); // 静默失效，因为已经输出了具体错误信息
+                    console.log(`❌ 用户 ${userIP} 会话验证失败 - 页面标题不匹配: ${title}`);
+                    this.invalidate(userIP, true); // 静默失效
                     return false;
                 }
             } else {
-                console.log(`❌ 会话验证失败 - HTTP状态: ${testResponse.status}`);
-                this.invalidate(true); // 静默失效，因为已经输出了具体错误信息
+                console.log(`❌ 用户 ${userIP} 会话验证失败 - HTTP状态: ${testResponse.status}`);
+                this.invalidate(userIP, true); // 静默失效
                 return false;
             }
             
         } catch (error) {
-            console.log(`❌ 会话验证异常: ${error.message}`);
-            this.invalidate(true); // 静默失效，因为已经输出了具体错误信息
+            console.log(`❌ 用户 ${userIP} 会话验证异常: ${error.message}`);
+            this.invalidate(userIP, true); // 静默失效
             return false;
         }
     },
     
-    // 保存会话状态
-    save(cookies, jsessionid) {
-        this.cookies = cookies;
-        this.jsessionid = jsessionid;
-        this.lastUpdate = Date.now();
-        this.isValid = true;
-        
-        const saveTime = new Date(this.lastUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-        console.log(`会话已保存，保存时间: ${saveTime}`);
-    },
-    
-    // 使会话失效
-    invalidate(silent = false) {
-        this.cookies = '';
-        this.jsessionid = '';
-        this.lastUpdate = null;
-        this.isValid = false;
-        if (!silent) {
-            console.log('会话已失效');
-        }
-    },
-    
-    // 获取会话保存时间
-    getLastUpdateTime() {
-        if (!this.lastUpdate) {
+    // 获取用户会话保存时间
+    getLastUpdateTime(userIP) {
+        const session = this.get(userIP);
+        if (!session.lastUpdate) {
             return null;
         }
-        return new Date(this.lastUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        return new Date(session.lastUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
     }
 };
 
 // 直接执行AJAX查询（复用现有会话）
-async function performDirectQuery() {
-    console.log('\n使用现有会话直接查询电费...');
+async function performDirectQuery(userIP) {
+    console.log(`\n用户 ${userIP} 使用现有会话直接查询电费...`);
     
-    const queryUrl = AuthSession.jsessionid ? 
-        `http://202.195.206.214/epay/electric/queryelectricbill;jsessionid=${AuthSession.jsessionid}` : 
+    const userAuthSession = UserAuthSession.get(userIP);
+    const queryUrl = userAuthSession.jsessionid ? 
+        `http://202.195.206.214/epay/electric/queryelectricbill;jsessionid=${userAuthSession.jsessionid}` : 
         'http://202.195.206.214/epay/electric/queryelectricbill';
 
-    console.log(`AJAX查询URL: ${queryUrl}`);
+    console.log(`用户 ${userIP} AJAX查询URL: ${queryUrl}`);
 
     // 构建查询参数
     const queryFormData = new URLSearchParams();
@@ -330,9 +341,9 @@ async function performDirectQuery() {
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Cookie': AuthSession.cookies,
-            'Referer': AuthSession.jsessionid ? 
-                `http://202.195.206.214/epay/electric/load4electricbill;jsessionid=${AuthSession.jsessionid}?elcsysid=2` : 
+            'Cookie': userAuthSession.cookies,
+            'Referer': userAuthSession.jsessionid ? 
+                `http://202.195.206.214/epay/electric/load4electricbill;jsessionid=${userAuthSession.jsessionid}?elcsysid=2` : 
                 'http://202.195.206.214/epay/electric/load4electricbill?elcsysid=2',
             'X-Requested-With': 'XMLHttpRequest'
         }
@@ -545,14 +556,29 @@ async function performFullAuthentication(username = null, password = null, trigg
     const billPage$ = cheerio.load(billPageResponse.data);
     console.log('电费页面标题:', billPage$('title').text());
 
-    // 保存会话状态到全局管理器
-    AuthSession.save(newAuthCookies, jsessionid);
+    // 保存会话状态到指定用户的认证会话管理器
+    if (triggerUserIP) {
+        UserAuthSession.save(triggerUserIP, newAuthCookies, jsessionid);
+    } else {
+        // 如果没有指定用户IP，为所有密码登录用户更新认证会话
+        for (const [userIP, session] of userSessions.entries()) {
+            if (session.loginMethod === 'password' && session.isLoggedIn) {
+                UserAuthSession.save(userIP, newAuthCookies, jsessionid);
+            }
+        }
+    }
     
     // 验证会话有效性并执行查询
     console.log('\n⑦: 使用新会话执行查询...');
-    const remainingAmount = await performDirectQuery();
+    const targetUserIP = triggerUserIP || Array.from(userSessions.entries())
+        .find(([ip, session]) => session.loginMethod === 'password' && session.isLoggedIn)?.[0];
     
-    return remainingAmount;
+    if (targetUserIP) {
+        const remainingAmount = await performDirectQuery(targetUserIP);
+        return remainingAmount;
+    } else {
+        throw new Error('没有找到有效的用户会话');
+    }
 }
 
 // 模拟登录并获取电费余额
@@ -562,52 +588,78 @@ async function queryElectricityBalance(isAutoQuery = true, triggerUserIP = null)
         
         let remainingAmount = 0;
         let sessionReused = false;
+        let targetUserIP = triggerUserIP;
         
-        // 检查现有会话是否有效 - 通过发送测试请求验证
-        const sessionValid = await AuthSession.isSessionValid();
+        // 如果是自动查询且没有指定用户IP，找到一个可用的密码登录用户
+        if (isAutoQuery && !targetUserIP) {
+            cleanupExpiredSessions();
+            for (const [ip, session] of userSessions.entries()) {
+                if (session.isLoggedIn && session.loginMethod === 'password' && session.username && session.password) {
+                    targetUserIP = ip;
+                    console.log(`自动查询选择用户: ${ip}`);
+                    break;
+                }
+            }
+            
+            if (!targetUserIP) {
+                throw new Error('没有可用的密码登录用户进行自动查询');
+            }
+        }
+        
+        // 如果是手动查询，必须提供用户IP
+        if (!isAutoQuery && !targetUserIP) {
+            throw new Error('手动查询需要指定用户IP');
+        }
+        
+        // 检查目标用户的认证会话是否有效
+        const sessionValid = await UserAuthSession.isSessionValid(targetUserIP);
         
         if (sessionValid) {
-            console.log('\n会话验证通过，使用现有会话');
+            console.log(`\n用户 ${targetUserIP} 会话验证通过，使用现有会话`);
             
             try {
                 // 使用现有会话直接查询
-                remainingAmount = await performDirectQuery();
+                remainingAmount = await performDirectQuery(targetUserIP);
                 sessionReused = true;
             } catch (error) {
-                console.log('会话复用失败:', error.message);
+                console.log(`用户 ${targetUserIP} 会话复用失败:`, error.message);
                 
                 // 会话失效，清除状态
-                AuthSession.invalidate();
+                UserAuthSession.invalidate(targetUserIP);
                 sessionReused = false;
             }
         } else {
-            console.log('\n会话验证失败或无会话，需要重新认证');
+            console.log(`\n用户 ${targetUserIP} 会话验证失败或无会话，需要重新认证`);
         }
         
         // 如果会话复用失败或没有有效会话，处理重新认证
         if (!sessionReused) {
-            // 如果是自动查询，寻找任何可用的密码登录用户进行重新认证
+            // 寻找可用的密码登录用户进行重新认证
             let passwordUser = null;
+            let authUserIP = null;
+            
             if (isAutoQuery) {
-                cleanupExpiredSessions();
+                // 自动查询时，找任何可用的密码登录用户
                 for (const [ip, session] of userSessions.entries()) {
                     if (session.isLoggedIn && session.loginMethod === 'password' && session.username && session.password) {
                         passwordUser = session;
+                        authUserIP = ip;
                         break;
                     }
                 }
-            } else if (triggerUserIP) {
+            } else if (targetUserIP) {
                 // 手动查询时，使用指定用户的凭据
-                const userSession = getUserSession(triggerUserIP);
+                const userSession = getUserSession(targetUserIP);
                 if (userSession && userSession.loginMethod === 'password' && userSession.username && userSession.password) {
                     passwordUser = userSession;
+                    authUserIP = targetUserIP;
                 }
             }
             
-            if (passwordUser) {
-                console.log('\n使用密码登录凭据进行重新认证...');
+            if (passwordUser && authUserIP) {
+                console.log(`\n用户 ${authUserIP} 使用密码登录凭据进行重新认证...`);
                 try {
-                    remainingAmount = await performFullAuthentication(passwordUser.username, passwordUser.password);
+                    remainingAmount = await performFullAuthentication(passwordUser.username, passwordUser.password, authUserIP);
                     console.log('✅ 重新认证成功');
                 } catch (error) {
                     console.log('❌ 重新认证失败:', error.message);
@@ -635,9 +687,9 @@ async function queryElectricityBalance(isAutoQuery = true, triggerUserIP = null)
             console.log('开始重新查询...');
             
             try {
-                const retrySessionValid = await AuthSession.isSessionValid();
+                const retrySessionValid = await UserAuthSession.isSessionValid(targetUserIP);
                 if (retrySessionValid) {
-                    const retryAmount = await performDirectQuery();
+                    const retryAmount = await performDirectQuery(targetUserIP);
                     console.log(`重新查询结果: ${retryAmount} 度`);
                     
                     // 如果重新查询的结果也是0或相同的异常值，仍然保存原结果，但标记为可能异常
@@ -684,9 +736,11 @@ async function queryElectricityBalance(isAutoQuery = true, triggerUserIP = null)
     } catch (error) {
         console.error('查询电费余额失败:', error.message);
         
-        // 如果是认证相关错误，清除会话状态
+        // 如果是认证相关错误，清除对应用户的会话状态
         if (error.message.includes('认证') || error.message.includes('登录') || error.message.includes('会话')) {
-            AuthSession.invalidate();
+            if (triggerUserIP) {
+                UserAuthSession.invalidate(triggerUserIP);
+            }
         }
         
         if (error.response) {
@@ -1158,18 +1212,35 @@ app.post('/api/cleanup-backups', async (req, res) => {
 
 // 获取会话状态
 app.get('/api/session-status', async (req, res) => {
-    const isValid = await AuthSession.isSessionValid();
-    res.json({
-        isValid: isValid,
-        lastUpdate: AuthSession.getLastUpdateTime(),
-        hasSession: !!AuthSession.cookies,
-        jsessionid: AuthSession.jsessionid ? 'xxx...' + AuthSession.jsessionid.slice(-8) : null
-    });
+    const clientIP = getClientIP(req);
+    const userSession = getUserSession(clientIP);
+    
+    if (userSession && userSession.isLoggedIn) {
+        const isValid = await UserAuthSession.isSessionValid(clientIP);
+        const authSession = UserAuthSession.get(clientIP);
+        
+        res.json({
+            isValid: isValid,
+            lastUpdate: UserAuthSession.getLastUpdateTime(clientIP),
+            hasSession: !!authSession.cookies,
+            jsessionid: authSession.jsessionid ? 'xxx...' + authSession.jsessionid.slice(-8) : null
+        });
+    } else {
+        res.json({
+            isValid: false,
+            lastUpdate: null,
+            hasSession: false,
+            jsessionid: null
+        });
+    }
 });
 
 // 手动清除会话
 app.post('/api/clear-session', (req, res) => {
-    AuthSession.invalidate();
+    const clientIP = getClientIP(req);
+    UserAuthSession.invalidate(clientIP);
+    deleteUserSession(clientIP);
+    
     res.json({
         success: true,
         message: '会话已清除'
@@ -1425,14 +1496,16 @@ app.post('/api/check-qrcode-login', async (req, res) => {
                     return;
                 }
 
-                // 保存会话状态到全局管理器
-                AuthSession.save(newAuthCookies, jsessionid);
+                // 获取客户端IP
+                const clientIP = getClientIP(req);
+                
+                // 保存会话状态到该用户的认证会话管理器
+                UserAuthSession.save(clientIP, newAuthCookies, jsessionid);
                 
                 // 电费页面可以正常访问，说明会话有效，直接标记登录成功
                 console.log('✅ 扫码登录成功，电费页面可正常访问');
                 
                 // 登录成功，更新登录状态
-                const clientIP = getClientIP(req);
                 setUserSession(clientIP, {
                     isLoggedIn: true,
                     loginTime: getCurrentBeijingDateTime(),
@@ -1527,14 +1600,16 @@ app.post('/api/check-qrcode-login', async (req, res) => {
 
                     console.log('重定向登录认证Cookie已保存:', newAuthCookies);
 
-                    // 保存会话状态到全局管理器
-                    AuthSession.save(newAuthCookies, jsessionid);
+                    // 获取客户端IP
+                    const clientIP = getClientIP(req);
+                    
+                    // 保存会话状态到该用户的认证会话管理器
+                    UserAuthSession.save(clientIP, newAuthCookies, jsessionid);
                     
                     // 验证会话有效性
-                    const sessionValid = await AuthSession.isSessionValid();
+                    const sessionValid = await UserAuthSession.isSessionValid(clientIP);
                     
                     if (sessionValid) {
-                        // 获取客户端IP
                         const clientIP = getClientIP(req);
                         
                         // 设置用户会话状态
@@ -1705,11 +1780,11 @@ app.post('/api/password-login', async (req, res) => {
 
             console.log('认证Cookie已保存:', newAuthCookies);
 
-            // 保存会话状态到全局管理器
-            AuthSession.save(newAuthCookies, jsessionid);
+            // 保存会话状态到该用户的认证会话管理器
+            UserAuthSession.save(clientIP, newAuthCookies, jsessionid);
             
             // 验证会话有效性
-            const sessionValid = await AuthSession.isSessionValid();
+            const sessionValid = await UserAuthSession.isSessionValid(clientIP);
             
             if (sessionValid) {
                 // 登录成功，更新登录状态并保存用户凭据
@@ -1780,9 +1855,6 @@ app.post('/api/logout', (req, res) => {
     const clientIP = getClientIP(req);
     deleteUserSession(clientIP);
     
-    // 清除会话状态
-    AuthSession.invalidate();
-    
     res.json({
         success: true,
         message: '已退出登录'
@@ -1805,11 +1877,10 @@ app.get('/api/query', async (req, res) => {
         }
         
         // 检查会话有效性
-        const sessionValid = await AuthSession.isSessionValid();
+        const sessionValid = await UserAuthSession.isSessionValid(clientIP);
         
         if (!sessionValid) {
             // 会话失效，清除登录状态，提示重新登录
-            // 注意：不需要再次调用 invalidate()，因为 isSessionValid() 已经调用过了
             deleteUserSession(clientIP);
             
             return res.status(401).json({
@@ -2720,7 +2791,7 @@ cron.schedule('0,30 * * * *', async () => {
         if (error.message.includes('会话') || error.message.includes('认证') || error.message.includes('登录')) {
             console.log(`[${timeStr}] 会话相关错误，清除所有用户的登录状态`);
             userSessions.clear();
-            AuthSession.invalidate();
+            userAuthSessions.clear();
         }
     }
     
@@ -2773,7 +2844,7 @@ cron.schedule('30 59 23 * * *', async () => {
         if (error.message.includes('会话') || error.message.includes('认证') || error.message.includes('登录')) {
             console.log(`[${timeStr}] 会话相关错误，清除所有用户的登录状态`);
             userSessions.clear();
-            AuthSession.invalidate();
+            userAuthSessions.clear();
         }
     }
     
