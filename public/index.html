@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电费余额查询</title>
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="shortcut icon" type="image/png" href="logo.png">
+    <link rel="apple-touch-icon" href="logo.png">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>电费余额查询</h1>
+            <p>C14-418</p>
+        </header>
+
+        <div class="main-content">
+            <!-- 查询区域 -->
+            <div class="query-section">
+                <h2>电费查询</h2>
+                <div class="query-form">
+                    <div class="form-group">
+                        <label>缴费楼栋：</label>
+                        <select id="building" disabled>
+                            <option value="学生公寓C14">学生公寓C14</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>缴费楼层：</label>
+                        <select id="floor" disabled>
+                            <option value="学生公寓C14四层">学生公寓C14四层</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>缴费房间：</label>
+                        <select id="room" disabled>
+                            <option value="C14-418">C14-418</option>
+                        </select>
+                    </div>
+                    <button id="queryBtn" class="query-btn">查询余额</button>
+                </div>
+
+                <div class="result-section">
+                    <div class="balance-display">
+                        <h3>剩余电量</h3>
+                        <div class="balance-amount" id="balanceAmount">--</div>
+                        <div class="balance-unit">度</div>
+                    </div>
+                    <div class="query-info">
+                        <p>上次查询时间: <span id="lastQueryTime">--</span></p>
+                        <p>查询状态: <span id="queryStatus">待查询</span></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 统计信息 -->
+            <div class="stats-section">
+                <h2>统计信息</h2>
+                <div class="stats-cards">
+                    <div class="stat-card">
+                        <h3>今日查询次数</h3>
+                        <div class="stat-value" id="todayQueries">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>耗电量</h3>
+                        <div class="stat-value" id="avgBalance">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>最低余额</h3>
+                        <div class="stat-value" id="minBalance">--</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>最高余额</h3>
+                        <div class="stat-value" id="maxBalance">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 图表区域 -->
+            <div class="chart-section">
+                <h2>电费使用趋势</h2>
+                <div class="chart-controls">
+                    <button class="chart-btn" data-period="all">全部</button>
+                    <button class="chart-btn active" data-period="week">最近7天</button>
+                    <button class="chart-btn" data-period="month">最近30天</button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="electricityChart"></canvas>
+                </div>
+                <!-- 时间轴控制条（仅在详细模式下显示） -->
+                <div id="timeRangeSlider" class="time-range-slider" style="display: none;">
+                    <div class="slider-track">
+                        <div class="slider-range" id="sliderRange">
+                            <div class="slider-handle left" id="leftHandle"></div>
+                            <div class="slider-handle right" id="rightHandle"></div>
+                        </div>
+                    </div>
+                    <div class="slider-labels">
+                        <span class="slider-label-start" id="sliderLabelStart">00:00</span>
+                        <span class="slider-label-end" id="sliderLabelEnd">23:59</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 历史记录 -->
+            <div class="history-section">
+                <h2>历史记录</h2>
+                <div class="history-controls">
+                    <div class="view-controls">
+                        <label>查看方式：</label>
+                        <select id="historyViewType">
+                            <option value="summary">按天汇总</option>
+                            <option value="detailed">每天所有记录</option>
+                        </select>
+                        <div id="summaryTimeRange">
+                            <label>时间范围：</label>
+                            <select id="historyDays">
+                                <option value="-1">全部</option>
+                                <option value="7" selected>最近7天</option>
+                                <option value="30">最近30天</option>
+                            </select>
+                        </div>
+                        <div id="detailedDatePicker" style="display: none;">
+                            <label>选择日期：</label>
+                            <input type="date" id="selectedDate">
+                            <button id="prevDayBtn" class="date-nav-btn" title="上一天">←</button>
+                            <button id="nextDayBtn" class="date-nav-btn" title="下一天">→</button>
+                        </div>
+                        <button id="refreshHistoryBtn" class="chart-btn">刷新</button>
+                        <span id="refreshStatus" style="color: #28a745; margin-left: 10px; display: none;">刷新完成</span>
+                    </div>
+                    <div class="clear-controls">
+                        <button id="clearSelectedBtn" class="clear-btn" style="display: none;">删除选中</button>
+                        <button id="clearOldDataBtn" class="clear-btn">清理旧数据</button>
+                        <button id="clearAllDataBtn" class="clear-btn danger">清空所有记录</button>
+                    </div>
+                </div>
+                <div class="history-table">
+                    <table id="historyTable">
+                        <thead id="historyHeader">
+                            <tr>
+                                <th>日期</th>
+                                <th>平均余额 (度)</th>
+                                <th>最低余额 (度)</th>
+                                <th>最高余额 (度)</th>
+                                <th>查询次数</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody">
+                            <tr>
+                                <td colspan="5" class="loading">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 调试区域 -->
+        <div class="debug-section">
+            <h2>系统调试</h2>
+            <div class="debug-controls">
+                <button id="testConnectionBtn" class="debug-btn">测试连接</button>
+                <button id="restoreDataBtn" class="restore-btn">数据备份与恢复</button>
+            </div>
+            <div id="debugResult" class="debug-result" style="display: none;">
+                <h3>调试结果</h3>
+                <pre id="debugOutput"></pre>
+            </div>
+        </div>
+
+        <footer>
+            <p>每 30 分钟自动查询一次余额</p>
+            <p>每天 2 点自动进行一次备份</p>
+            <p>上次查询时间: <span id="lastUpdate">--</span></p>
+        </footer>
+    </div>
+
+    <!-- 加载动画 -->
+    <div id="loadingModal" class="modal">
+        <div class="modal-content">
+            <div class="loading-spinner"></div>
+            <p>正在查询电费余额...</p>
+        </div>
+    </div>
+
+    <!-- 清空数据确认框 -->
+    <div id="clearDataModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>确认删除</h3>
+            </div>
+            <div class="modal-body">
+                <p id="clearDataMessage">确定要删除这些记录吗？此操作不可撤销。</p>
+                <div class="date-range" id="dateRangeDiv" style="display: none;">
+                    <label>开始日期：</label>
+                    <input type="date" id="startDate">
+                    <label>结束日期：</label>
+                    <input type="date" id="endDate">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="confirmClearBtn" class="confirm-btn">确认删除</button>
+                <button id="cancelClearBtn" class="cancel-btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据恢复对话框 -->
+    <div id="restoreDataModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>数据备份与恢复</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <!-- 手动备份区域 -->
+                <div class="backup-section">
+                    <h4>创建备份</h4>
+                    <button id="createBackupBtn" class="backup-btn">创建手动备份</button>
+                    <div id="backupStatus" class="status-message" style="display: none;"></div>
+                </div>
+                
+                <hr style="margin: 20px 0;">
+                
+                <!-- 数据恢复区域 -->
+                <div class="restore-section">
+                    <h4>恢复数据</h4>
+                    <p><strong>警告：</strong>这会清空当前所有数据并从备份中恢复，请谨慎操作！</p>
+                    <p>系统会在恢复前自动创建当前数据的备份。</p>
+                    <div class="backup-list">
+                        <label>选择要恢复的备份：</label>
+                        <div class="backup-select-container">
+                            <select id="backupSelect">
+                                <option value="">正在加载备份列表...</option>
+                            </select>
+                            <button id="refreshBackupListBtn" class="refresh-btn">刷新列表</button>
+                        </div>
+                    </div>
+                    <div class="restore-confirm-section">
+                        <button id="confirmRestoreBtn" class="confirm-btn" style="display: none;">确认恢复</button>
+                    </div>
+                    <div id="restoreStatus" class="status-message" style="display: none;"></div>
+                </div>
+                
+                <hr style="margin: 20px 0;">
+                
+                <!-- 备份管理区域 -->
+                <div class="backup-manage-section">
+                    <h4>备份管理</h4>
+                    <button id="showBackupManageBtn" class="backup-btn">管理备份文件</button>
+                    <div id="backupManageContent" class="backup-manage-content" style="display: none;">
+                        <p>选择要删除的备份文件（可多选，支持Shift键连续选择）：</p>
+                        <div class="backup-checkbox-list" id="backupCheckboxList">
+                            <div class="loading-message">正在加载备份列表...</div>
+                        </div>
+                        <div class="backup-manage-buttons">
+                            <button id="selectAllBackupsBtn" class="select-all-btn" disabled>全选</button>
+                            <button id="unselectAllBackupsBtn" class="unselect-all-btn" disabled>取消全选</button>
+                            <button id="deleteSelectedBackupsBtn" class="delete-btn" disabled>删除选中的备份</button>
+                        </div>
+                        <div id="deleteBackupStatus" class="status-message" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div id="globalBackupStatus" class="status-message" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

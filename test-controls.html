@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>控制条测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .time-range-slider {
+            margin: 20px 0;
+            padding: 20px 0;
+            background: #f5f5f5;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .slider-container {
+            position: relative;
+            margin: 20px 0;
+        }
+        .slider-track {
+            width: 100%;
+            height: 8px;
+            background: #ddd;
+            border-radius: 4px;
+            position: relative;
+            cursor: pointer;
+        }
+        .slider-range {
+            position: absolute;
+            height: 100%;
+            background: #667eea;
+            border-radius: 4px;
+            cursor: move;
+        }
+        .slider-handle {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: #667eea;
+            border: 2px solid white;
+            border-radius: 50%;
+            cursor: grab;
+            top: -6px;
+            transform: translateX(-50%);
+        }
+        .slider-handle:hover {
+            transform: translateX(-50%) scale(1.2);
+        }
+        .slider-handle.dragging {
+            cursor: grabbing;
+            transform: translateX(-50%) scale(1.3);
+        }
+        .slider-handle.left {
+            left: 0;
+        }
+        .slider-handle.right {
+            right: 0;
+        }
+        .slider-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+        .test-info {
+            background: #e8f4fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .test-button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .test-button:hover {
+            background: #5a67d8;
+        }
+    </style>
+</head>
+<body>
+    <h1>控制条和控制点测试</h1>
+    
+    <div class="test-info">
+        <h3>测试状态</h3>
+        <p id="testStatus">初始化中...</p>
+        <button class="test-button" onclick="testControlEvents()">测试控制事件</button>
+        <button class="test-button" onclick="resetSlider()">重置滑块</button>
+    </div>
+    
+    <div class="time-range-slider" id="timeRangeSlider">
+        <h3>时间轴控制条</h3>
+        <div class="slider-container">
+            <div class="slider-track">
+                <div class="slider-range" id="sliderRange">
+                    <div class="slider-handle left" id="leftHandle"></div>
+                    <div class="slider-handle right" id="rightHandle"></div>
+                </div>
+            </div>
+        </div>
+        <div class="slider-labels">
+            <span id="sliderLabelStart">00:00</span>
+            <span id="sliderLabelEnd">24:00</span>
+        </div>
+        <div style="margin-top: 15px;">
+            <strong>当前范围：</strong>
+            <span id="currentRange">00:00 - 24:00</span>
+        </div>
+    </div>
+    
+    <div class="test-info">
+        <h3>事件日志</h3>
+        <div id="eventLog" style="max-height: 200px; overflow-y: auto; background: white; padding: 10px; border: 1px solid #ddd; border-radius: 3px;"></div>
+        <button class="test-button" onclick="clearLog()">清空日志</button>
+    </div>
+
+    <script>
+        // 模拟时间轴数据
+        const timeRangeData = {
+            startTime: new Date().setHours(0, 0, 0, 0), // 今天00:00
+            endTime: new Date().setHours(23, 59, 59, 999), // 今天23:59:59
+            viewStart: new Date().setHours(0, 0, 0, 0),
+            viewEnd: new Date().setHours(23, 59, 59, 999),
+            isDragging: false,
+            dragType: null,
+            lastMouseX: 0,
+            initialized: false
+        };
+        
+        // 日志函数
+        function logEvent(message) {
+            const log = document.getElementById('eventLog');
+            const time = new Date().toLocaleTimeString();
+            log.innerHTML += `<div>[${time}] ${message}</div>`;
+            log.scrollTop = log.scrollHeight;
+            console.log(`[控制条测试] ${message}`);
+        }
+        
+        function clearLog() {
+            document.getElementById('eventLog').innerHTML = '';
+        }
+        
+        // 更新显示
+        function updateDisplay() {
+            const range = document.getElementById('currentRange');
+            const startTime = new Date(timeRangeData.viewStart);
+            const endTime = new Date(timeRangeData.viewEnd);
+            
+            const startStr = startTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+            const endStr = endTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+            
+            range.textContent = `${startStr} - ${endStr}`;
+            
+            // 更新滑块位置
+            updateSliderDisplay();
+        }
+        
+        // 更新滑块显示
+        function updateSliderDisplay() {
+            const sliderRange = document.getElementById('sliderRange');
+            const startLabel = document.getElementById('sliderLabelStart');
+            const endLabel = document.getElementById('sliderLabelEnd');
+            
+            if (!sliderRange || !startLabel || !endLabel) return;
+            
+            const totalRange = timeRangeData.endTime - timeRangeData.startTime;
+            if (totalRange <= 0) return;
+            
+            const startPercent = Math.max(0, Math.min(100, ((timeRangeData.viewStart - timeRangeData.startTime) / totalRange) * 100));
+            const endPercent = Math.max(0, Math.min(100, ((timeRangeData.viewEnd - timeRangeData.startTime) / totalRange) * 100));
+            
+            sliderRange.style.left = startPercent + '%';
+            sliderRange.style.width = Math.max(5, endPercent - startPercent) + '%';
+            
+            // 更新标签
+            const startTime = new Date(timeRangeData.viewStart);
+            const endTime = new Date(timeRangeData.viewEnd);
+            startLabel.textContent = startTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+            endLabel.textContent = endTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+        
+        // 初始化控制条
+        function initializeSlider() {
+            logEvent('开始初始化控制条');
+            
+            const slider = document.getElementById('timeRangeSlider');
+            const sliderRange = document.getElementById('sliderRange');
+            const leftHandle = document.getElementById('leftHandle');
+            const rightHandle = document.getElementById('rightHandle');
+            
+            if (!slider || !sliderRange || !leftHandle || !rightHandle) {
+                logEvent('❌ 控制条元素未找到');
+                document.getElementById('testStatus').textContent = '❌ 控制条元素未找到';
+                return false;
+            }
+            
+            logEvent('✅ 所有控制条元素找到');
+            
+            // 绑定事件
+            bindSliderEvents();
+            
+            // 初始化显示
+            timeRangeData.viewStart = timeRangeData.startTime + (timeRangeData.endTime - timeRangeData.startTime) * 0.2;
+            timeRangeData.viewEnd = timeRangeData.startTime + (timeRangeData.endTime - timeRangeData.startTime) * 0.8;
+            
+            updateDisplay();
+            
+            timeRangeData.initialized = true;
+            logEvent('✅ 控制条初始化完成');
+            document.getElementById('testStatus').textContent = '✅ 控制条初始化完成，可以拖拽测试';
+            
+            return true;
+        }
+        
+        // 绑定事件
+        function bindSliderEvents() {
+            const sliderRange = document.getElementById('sliderRange');
+            const leftHandle = document.getElementById('leftHandle');
+            const rightHandle = document.getElementById('rightHandle');
+            
+            // 拖拽范围条
+            sliderRange.addEventListener('mousedown', (e) => {
+                if (e.target === leftHandle || e.target === rightHandle) {
+                    return;
+                }
+                logEvent('开始拖拽范围条');
+                timeRangeData.isDragging = true;
+                timeRangeData.dragType = 'range';
+                timeRangeData.lastMouseX = e.clientX;
+                sliderRange.classList.add('dragging');
+                e.preventDefault();
+            });
+            
+            // 拖拽左控制点
+            leftHandle.addEventListener('mousedown', (e) => {
+                logEvent('开始拖拽左控制点');
+                timeRangeData.isDragging = true;
+                timeRangeData.dragType = 'left';
+                timeRangeData.lastMouseX = e.clientX;
+                leftHandle.classList.add('dragging');
+                e.preventDefault();
+                e.stopPropagation();
+            });
+            
+            // 拖拽右控制点
+            rightHandle.addEventListener('mousedown', (e) => {
+                logEvent('开始拖拽右控制点');
+                timeRangeData.isDragging = true;
+                timeRangeData.dragType = 'right';
+                timeRangeData.lastMouseX = e.clientX;
+                rightHandle.classList.add('dragging');
+                e.preventDefault();
+                e.stopPropagation();
+            });
+            
+            // 全局鼠标移动
+            document.addEventListener('mousemove', handleMouseMove);
+            
+            // 全局鼠标释放
+            document.addEventListener('mouseup', handleMouseUp);
+            
+            logEvent('✅ 事件绑定完成');
+        }
+        
+        // 处理鼠标移动
+        function handleMouseMove(e) {
+            if (!timeRangeData.isDragging) return;
+            
+            const sliderTrack = document.querySelector('.slider-track');
+            if (!sliderTrack) return;
+            
+            const rect = sliderTrack.getBoundingClientRect();
+            const deltaX = e.clientX - timeRangeData.lastMouseX;
+            const totalRange = timeRangeData.endTime - timeRangeData.startTime;
+            const deltaTime = (deltaX / rect.width) * totalRange;
+            
+            logEvent(`鼠标移动: ${timeRangeData.dragType}, deltaX: ${deltaX}px`);
+            
+            switch (timeRangeData.dragType) {
+                case 'range':
+                    // 移动整个窗口
+                    const currentRange = timeRangeData.viewEnd - timeRangeData.viewStart;
+                    let newStart = timeRangeData.viewStart + deltaTime;
+                    let newEnd = newStart + currentRange;
+                    
+                    // 边界检查
+                    if (newStart < timeRangeData.startTime) {
+                        newStart = timeRangeData.startTime;
+                        newEnd = newStart + currentRange;
+                    }
+                    if (newEnd > timeRangeData.endTime) {
+                        newEnd = timeRangeData.endTime;
+                        newStart = newEnd - currentRange;
+                    }
+                    
+                    timeRangeData.viewStart = newStart;
+                    timeRangeData.viewEnd = newEnd;
+                    break;
+                    
+                case 'left':
+                    // 调整开始时间
+                    let newViewStart = Math.max(timeRangeData.startTime, 
+                        Math.min(timeRangeData.viewEnd - 3600000, timeRangeData.viewStart + deltaTime));
+                    timeRangeData.viewStart = newViewStart;
+                    break;
+                    
+                case 'right':
+                    // 调整结束时间
+                    let newViewEnd = Math.min(timeRangeData.endTime,
+                        Math.max(timeRangeData.viewStart + 3600000, timeRangeData.viewEnd + deltaTime));
+                    timeRangeData.viewEnd = newViewEnd;
+                    break;
+            }
+            
+            timeRangeData.lastMouseX = e.clientX;
+            updateDisplay();
+        }
+        
+        // 处理鼠标释放
+        function handleMouseUp() {
+            if (!timeRangeData.isDragging) return;
+            
+            logEvent(`结束拖拽: ${timeRangeData.dragType}`);
+            
+            timeRangeData.isDragging = false;
+            timeRangeData.dragType = null;
+            
+            // 移除拖拽样式
+            document.querySelectorAll('.dragging').forEach(el => {
+                el.classList.remove('dragging');
+            });
+        }
+        
+        // 测试函数
+        function testControlEvents() {
+            logEvent('=== 开始测试控制事件 ===');
+            
+            const elements = {
+                slider: document.getElementById('timeRangeSlider'),
+                range: document.getElementById('sliderRange'),
+                leftHandle: document.getElementById('leftHandle'),
+                rightHandle: document.getElementById('rightHandle')
+            };
+            
+            for (const [name, el] of Object.entries(elements)) {
+                if (el) {
+                    logEvent(`✅ ${name}: 存在`);
+                    // 测试点击事件
+                    el.addEventListener('click', () => {
+                        logEvent(`🖱️ ${name} 被点击`);
+                    });
+                } else {
+                    logEvent(`❌ ${name}: 不存在`);
+                }
+            }
+            
+            logEvent('=== 测试完成 ===');
+        }
+        
+        function resetSlider() {
+            logEvent('重置滑块');
+            timeRangeData.viewStart = timeRangeData.startTime;
+            timeRangeData.viewEnd = timeRangeData.endTime;
+            updateDisplay();
+        }
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            logEvent('页面加载完成');
+            setTimeout(() => {
+                initializeSlider();
+            }, 100);
+        });
+    </script>
+</body>
+</html>

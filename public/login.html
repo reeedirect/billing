@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 电费查询系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            min-width: 400px;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .logo p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .login-tabs {
+            display: flex;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #f8f9fa;
+        }
+
+        .tab-button {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            font-size: 16px;
+            color: #666;
+            transition: all 0.3s;
+        }
+
+        .tab-button.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .qrcode-login {
+            text-align: center;
+        }
+
+        .qrcode-container {
+            margin: 30px 0;
+            position: relative;
+        }
+
+        .qrcode-image {
+            width: 200px;
+            height: 200px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            display: block;
+            margin: 0 auto;
+            background: #f8f9fa;
+        }
+
+        .qrcode-loading {
+            width: 200px;
+            height: 200px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+            background: #f8f9fa;
+            color: #666;
+        }
+
+        .qrcode-status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .qrcode-status.waiting {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .qrcode-status.success {
+            background: #e8f5e8;
+            color: #2e7d32;
+        }
+
+        .qrcode-status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .login-button {
+            width: 100%;
+            padding: 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .login-button:hover {
+            background: #5a6fd8;
+        }
+
+        .login-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .refresh-button {
+            margin-top: 15px;
+            padding: 8px 16px;
+            background: #f8f9fa;
+            color: #666;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .refresh-button:hover {
+            background: #e9ecef;
+        }
+
+        .error-message {
+            background: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 15px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 480px) {
+            .login-container {
+                padding: 30px 20px;
+                min-width: 300px;
+            }
+            
+            .qrcode-image, .qrcode-loading {
+                width: 150px;
+                height: 150px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <h1>🔌 电费查询系统</h1>
+            <p>请选择登录方式</p>
+        </div>
+
+        <div class="login-tabs">
+            <button class="tab-button active" onclick="switchTab('qrcode')">扫码登录</button>
+            <button class="tab-button" onclick="switchTab('password')">密码登录</button>
+        </div>
+
+        <!-- 扫码登录 -->
+        <div class="tab-content active" id="qrcode-tab">
+            <div class="qrcode-login">
+                <h3>微信扫码登录</h3>
+                <div class="qrcode-container">
+                    <div class="qrcode-loading" id="qrcode-loading">
+                        <div class="loading"></div>
+                        正在加载二维码...
+                    </div>
+                    <img class="qrcode-image" id="qrcode-image" style="display: none;" alt="登录二维码">
+                </div>
+                <div class="qrcode-status waiting" id="qrcode-status">
+                    请使用微信扫描二维码完成登录
+                </div>
+                <button class="refresh-button" onclick="refreshQRCode()">刷新二维码</button>
+            </div>
+        </div>
+
+        <!-- 密码登录 -->
+        <div class="tab-content" id="password-tab">
+            <form id="password-form">
+                <div class="form-group">
+                    <label for="username">用户名</label>
+                    <input type="text" id="username" name="username" placeholder="请输入用户名" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">密码</label>
+                    <input type="password" id="password" name="password" placeholder="请输入密码" required>
+                </div>
+                <button type="submit" class="login-button" id="password-login-btn">
+                    登录
+                </button>
+            </form>
+        </div>
+
+        <div class="error-message" id="error-message" style="display: none;"></div>
+    </div>
+
+    <script>
+        let currentLoginLT = null;
+        let qrCheckInterval = null;
+
+        // 切换登录方式
+        function switchTab(tab) {
+            // 更新按钮状态
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // 更新内容显示
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tab + '-tab').classList.add('active');
+
+            // 清除错误信息
+            hideError();
+
+            // 如果切换到扫码登录，自动加载二维码
+            if (tab === 'qrcode') {
+                loadQRCode();
+            } else {
+                // 如果切换到密码登录，停止二维码检查
+                if (qrCheckInterval) {
+                    clearInterval(qrCheckInterval);
+                    qrCheckInterval = null;
+                }
+            }
+        }
+
+        // 加载二维码
+        async function loadQRCode() {
+            const loading = document.getElementById('qrcode-loading');
+            const image = document.getElementById('qrcode-image');
+            const status = document.getElementById('qrcode-status');
+
+            loading.style.display = 'flex';
+            image.style.display = 'none';
+            status.className = 'qrcode-status waiting';
+            status.textContent = '正在生成二维码...';
+
+            try {
+                const response = await fetch('/api/qrcode-login');
+                const data = await response.json();
+
+                if (data.success) {
+                    currentLoginLT = data.loginLT;
+                    image.src = data.qrCodeUrl;
+                    image.style.display = 'block';
+                    loading.style.display = 'none';
+                    status.textContent = '请使用微信扫描二维码完成登录';
+                    
+                    // 开始检查登录状态
+                    startQRCodeCheck();
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                status.className = 'qrcode-status error';
+                status.textContent = '二维码加载失败：' + error.message;
+            }
+        }
+
+        // 刷新二维码
+        function refreshQRCode() {
+            if (qrCheckInterval) {
+                clearInterval(qrCheckInterval);
+                qrCheckInterval = null;
+            }
+            loadQRCode();
+        }
+
+        // 开始检查二维码登录状态
+        function startQRCodeCheck() {
+            if (qrCheckInterval) {
+                clearInterval(qrCheckInterval);
+            }
+
+            qrCheckInterval = setInterval(async () => {
+                if (!currentLoginLT) return;
+
+                try {
+                    const response = await fetch('/api/check-qrcode-login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            loginLT: currentLoginLT
+                        })
+                    });
+
+                    const data = await response.json();
+                    const status = document.getElementById('qrcode-status');
+
+                    if (data.success) {
+                        status.className = 'qrcode-status success';
+                        status.textContent = '登录成功！正在跳转...';
+                        
+                        clearInterval(qrCheckInterval);
+                        qrCheckInterval = null;
+                        
+                        // 跳转到主页面
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 1500);
+                    } else {
+                        status.className = 'qrcode-status waiting';
+                        status.textContent = data.message || '等待扫码确认...';
+                    }
+                } catch (error) {
+                    console.error('检查登录状态失败:', error);
+                }
+            }, 2000); // 每2秒检查一次
+        }
+
+        // 密码登录
+        document.getElementById('password-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const button = document.getElementById('password-login-btn');
+            
+            if (!username || !password) {
+                showError('请填写用户名和密码');
+                return;
+            }
+
+            button.disabled = true;
+            button.innerHTML = '<div class="loading"></div>登录中...';
+
+            try {
+                const response = await fetch('/api/password-login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    button.innerHTML = '登录成功！';
+                    hideError();
+                    
+                    // 跳转到主页面
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                showError(error.message);
+                button.disabled = false;
+                button.innerHTML = '登录';
+            }
+        });
+
+        // 显示错误信息
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        // 隐藏错误信息
+        function hideError() {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.style.display = 'none';
+        }
+
+        // 页面加载时检查登录状态
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch('/api/login-status');
+                const data = await response.json();
+                
+                if (data.isLoggedIn) {
+                    // 已经登录，直接跳转到主页
+                    window.location.href = '/';
+                } else {
+                    // 未登录，加载二维码
+                    loadQRCode();
+                }
+            } catch (error) {
+                console.error('检查登录状态失败:', error);
+                // 出错时也加载二维码
+                loadQRCode();
+            }
+        });
+
+        // 页面卸载时清理定时器
+        window.addEventListener('beforeunload', () => {
+            if (qrCheckInterval) {
+                clearInterval(qrCheckInterval);
+                qrCheckInterval = null;
+            }
+        });
+    </script>
+</body>
+</html>
