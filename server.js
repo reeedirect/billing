@@ -8,22 +8,23 @@ const path = require('path');
 
 // 获取北京时间 Date 对象
 function getBeijingTime() {
-    return new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Shanghai"}));
+    const now = new Date();
+    // 获取UTC时间戳，然后加上8小时（北京时间UTC+8）
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const beijingTime = new Date(utcTime + (8 * 3600000));
+    return beijingTime;
 }
 
 // 获取北京时间格式化字符串 (YYYY/M/D HH:mm:ss 格式，用于显示)
 function getBeijingTimeString() {
     const beijingTime = getBeijingTime();
-    return beijingTime.toLocaleString('zh-CN', { 
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: 'numeric', 
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-    }).replace(/\//g, '/');
+    const year = beijingTime.getFullYear();
+    const month = beijingTime.getMonth() + 1;
+    const day = beijingTime.getDate();
+    const hour = String(beijingTime.getHours()).padStart(2, '0');
+    const minute = String(beijingTime.getMinutes()).padStart(2, '0');
+    const second = String(beijingTime.getSeconds()).padStart(2, '0');
+    return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
 }
 
 // 获取北京时间日期字符串 (YYYY-MM-DD 格式)
@@ -231,7 +232,7 @@ const UserAuthSession = {
         };
         userAuthSessions.set(userIP, session);
         
-        const saveTime = new Date(session.lastUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        const saveTime = getBeijingTimeString();
         console.log(`用户 ${userIP} 的认证会话已保存，保存时间: ${saveTime}`);
     },
     
@@ -309,7 +310,15 @@ const UserAuthSession = {
         if (!session.lastUpdate) {
             return null;
         }
-        return new Date(session.lastUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        // 将时间戳转换为北京时间
+        const beijingTime = new Date(session.lastUpdate + (8 * 3600000 - new Date().getTimezoneOffset() * 60000));
+        const year = beijingTime.getFullYear();
+        const month = String(beijingTime.getMonth() + 1).padStart(2, '0');
+        const day = String(beijingTime.getDate()).padStart(2, '0');
+        const hour = String(beijingTime.getHours()).padStart(2, '0');
+        const minute = String(beijingTime.getMinutes()).padStart(2, '0');
+        const second = String(beijingTime.getSeconds()).padStart(2, '0');
+        return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
     }
 };
 
@@ -2695,17 +2704,17 @@ app.get('/api/last-auto-query', (req, res) => {
         }
         
         if (row) {
-            // 格式化时间为中文格式
+            // 格式化时间为北京时间
             const date = new Date(row.query_time);
-            const formattedTime = date.toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                timeZone: 'Asia/Shanghai'
-            }).replace(/\//g, '/');
+            // 转换为北京时间显示
+            const beijingTime = new Date(date.getTime() + (8 * 3600000 - date.getTimezoneOffset() * 60000));
+            const year = beijingTime.getFullYear();
+            const month = String(beijingTime.getMonth() + 1).padStart(2, '0');
+            const day = String(beijingTime.getDate()).padStart(2, '0');
+            const hour = String(beijingTime.getHours()).padStart(2, '0');
+            const minute = String(beijingTime.getMinutes()).padStart(2, '0');
+            const second = String(beijingTime.getSeconds()).padStart(2, '0');
+            const formattedTime = `${year}/${month}/${day} ${hour}:${minute}:${second}`;
             
             res.json({ 
                 last_auto_query: formattedTime,
@@ -2734,11 +2743,17 @@ app.get('/api/test-cron', (req, res) => {
             next.setHours(next.getHours() + 1, 0, 0, 0);
         }
         next.setTime(next.getTime() + i * 30 * 60 * 1000);
-        nextCronTimes.push(next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
+        const year = next.getFullYear();
+        const month = String(next.getMonth() + 1).padStart(2, '0');
+        const day = String(next.getDate()).padStart(2, '0');
+        const hour = String(next.getHours()).padStart(2, '0');
+        const minute = String(next.getMinutes()).padStart(2, '0');
+        const second = String(next.getSeconds()).padStart(2, '0');
+        nextCronTimes.push(`${year}/${month}/${day} ${hour}:${minute}:${second}`);
     }
     
     res.json({
-        current_time: now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+        current_time: getBeijingTimeString(),
         cron_expression: '0,30 * * * *',
         next_execution_times: nextCronTimes,
         server_uptime: process.uptime(),
@@ -2750,7 +2765,7 @@ app.get('/api/test-cron', (req, res) => {
 // 修改定时任务部分 - 每半小时查询一次（需要用户已登录）
 cron.schedule('0,30 * * * *', async () => {
     const now = getBeijingTime();
-    const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const timeStr = getBeijingTimeString();
     
     console.log(`\n=== [${timeStr}] 定时任务触发 ===`);
     
@@ -2815,7 +2830,7 @@ cron.schedule('0,30 * * * *', async () => {
 // 添加每天23:59:30的查询任务（需要用户已登录）
 cron.schedule('30 59 23 * * *', async () => {
     const now = getBeijingTime();
-    const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const timeStr = getBeijingTimeString();
     
     console.log(`\n=== [${timeStr}] 每日收尾查询触发 ===`);
     
@@ -2881,7 +2896,7 @@ cron.schedule('30 59 23 * * *', async () => {
 // 设置定时任务 - 每天凌晨2点创建备份并清理旧备份
 cron.schedule('0 2 * * *', async () => {
     const now = getBeijingTime();
-    const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const timeStr = getBeijingTimeString();
     
     console.log(`\n=== [${timeStr}] 每日自动备份任务触发 ===`);
     
@@ -2912,7 +2927,7 @@ app.use((err, req, res, next) => {
 // 启动服务器
 function startServer(port) {
     const now = getBeijingTime();
-    const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const timeStr = getBeijingTimeString();
     const server = app.listen(port, () => {
         console.log(`\n=== 电费查询系统启动 ===`);
         console.log(`服务器启动时间: ${timeStr}`);
