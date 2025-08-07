@@ -125,15 +125,83 @@ const ELECTRICITY_CONFIG = {
 // Cookie 存储
 let authCookies = '';
 
-// 登录状态管理
-let isUserLoggedIn = false;
-let loginSession = {
-    isLoggedIn: false,
-    loginTime: null,
-    loginMethod: null, // 'password' 或 'qrcode'
-    username: null,    // 用户登录时输入的用户名
-    password: null     // 用户登录时输入的密码
-};
+// 多用户登录状态管理
+const userSessions = new Map(); // IP -> 登录会话信息
+const MAX_CONCURRENT_USERS = 5; // 最大同时登录用户数
+
+// 获取客户端真实IP地址
+function getClientIP(req) {
+    return req.headers['x-forwarded-for'] || 
+           req.headers['x-real-ip'] || 
+           req.connection.remoteAddress || 
+           req.socket.remoteAddress || 
+           (req.connection.socket ? req.connection.socket.remoteAddress : null) || 
+           'unknown';
+}
+
+// 清理过期的用户会话（超过24小时未活动）
+function cleanupExpiredSessions() {
+    const now = Date.now();
+    const EXPIRE_TIME = 7 * 24 * 60 * 60 * 1000; // 24小时
+    
+    for (const [ip, session] of userSessions.entries()) {
+        if (now - session.lastActivity > EXPIRE_TIME) {
+            userSessions.delete(ip);
+            console.log(`清理过期会话: ${ip}`);
+        }
+    }
+}
+
+// 获取用户会话
+function getUserSession(ip) {
+    cleanupExpiredSessions();
+    return userSessions.get(ip) || null;
+}
+
+// 创建或更新用户会话
+function setUserSession(ip, sessionData) {
+    cleanupExpiredSessions();
+    
+    // 如果是新用户且已达到最大用户数限制
+    if (!userSessions.has(ip) && userSessions.size >= MAX_CONCURRENT_USERS) {
+        // 找到最久未活动的用户并移除
+        let oldestIP = null;
+        let oldestTime = Date.now();
+        
+        for (const [userIP, session] of userSessions.entries()) {
+            if (session.lastActivity < oldestTime) {
+                oldestTime = session.lastActivity;
+                oldestIP = userIP;
+            }
+        }
+        
+        if (oldestIP) {
+            userSessions.delete(oldestIP);
+            console.log(`达到最大用户数限制，移除最久未活动用户: ${oldestIP}`);
+        }
+    }
+    
+    userSessions.set(ip, {
+        ...sessionData,
+        lastActivity: Date.now()
+    });
+}
+
+// 删除用户会话
+function deleteUserSession(ip) {
+    return userSessions.delete(ip);
+}
+
+// 检查是否有任何用户处于登录状态
+function hasAnyLoggedInUser() {
+    cleanupExpiredSessions();
+    for (const [ip, session] of userSessions.entries()) {
+        if (session.isLoggedIn) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // 全局会话状态管理
 const AuthSession = {
@@ -302,16 +370,25 @@ async function performDirectQuery() {
 }
 
 // 执行完整的认证流程
-async function performFullAuthentication(username = null, password = null) {
+async function performFullAuthentication(username = null, password = null, triggerUserIP = null) {
     console.log('\n执行完整认证流程...');
     
-    // 如果没有提供用户名密码，检查登录会话中是否有
+    // 如果没有提供用户名密码，从已登录的密码用户中找一个
     if (!username || !password) {
-        if (loginSession.loginMethod === 'password' && loginSession.username && loginSession.password) {
-            username = loginSession.username;
-            password = loginSession.password;
-            console.log('使用已保存的用户凭据进行重新认证');
-        } else {
+        let foundCredentials = false;
+        
+        // 遍历用户会话，找到一个使用密码登录的用户
+        for (const [userIP, session] of userSessions.entries()) {
+            if (session.loginMethod === 'password' && session.username && session.password) {
+                username = session.username;
+                password = session.password;
+                console.log(`使用用户 ${userIP} 的凭据进行重新认证`);
+                foundCredentials = true;
+                break;
+            }
+        }
+        
+        if (!foundCredentials) {
             throw new Error('缺少用户名或密码，无法执行认证');
         }
     }
@@ -479,7 +556,7 @@ async function performFullAuthentication(username = null, password = null) {
 }
 
 // 模拟登录并获取电费余额
-async function queryElectricityBalance(isAutoQuery = true) {
+async function queryElectricityBalance(isAutoQuery = true, triggerUserIP = null) {
     try {
         console.log('\n开始查询电费余额...');
         
@@ -509,21 +586,39 @@ async function queryElectricityBalance(isAutoQuery = true) {
         
         // 如果会话复用失败或没有有效会话，处理重新认证
         if (!sessionReused) {
-            if (loginSession.loginMethod === 'password') {
-                console.log('\n密码登录会话失效，准备重新认证...');
+            // 如果是自动查询，寻找任何可用的密码登录用户进行重新认证
+            let passwordUser = null;
+            if (isAutoQuery) {
+                cleanupExpiredSessions();
+                for (const [ip, session] of userSessions.entries()) {
+                    if (session.isLoggedIn && session.loginMethod === 'password' && session.username && session.password) {
+                        passwordUser = session;
+                        break;
+                    }
+                }
+            } else if (triggerUserIP) {
+                // 手动查询时，使用指定用户的凭据
+                const userSession = getUserSession(triggerUserIP);
+                if (userSession && userSession.loginMethod === 'password' && userSession.username && userSession.password) {
+                    passwordUser = userSession;
+                }
+            }
+            
+            if (passwordUser) {
+                console.log('\n使用密码登录凭据进行重新认证...');
                 try {
-                    remainingAmount = await performFullAuthentication();
+                    remainingAmount = await performFullAuthentication(passwordUser.username, passwordUser.password);
                     console.log('✅ 重新认证成功');
                 } catch (error) {
                     console.log('❌ 重新认证失败:', error.message);
                     throw error;
                 }
-            } else if (loginSession.loginMethod === 'qrcode') {
-                console.log('\n扫码登录会话失效，需要用户重新登录');
-                throw new Error('扫码登录会话已失效，请重新扫码登录');
+            } else if (isAutoQuery) {
+                console.log('\n自动查询：没有可用的密码登录用户');
+                throw new Error('没有可用的密码登录用户进行重新认证');
             } else {
-                console.log('\n用户未登录或登录方式未知');
-                throw new Error('用户未登录，请先登录');
+                console.log('\n手动查询：用户会话失效，需要重新登录');
+                throw new Error('登录会话已失效，请重新登录');
             }
         }
         
@@ -1081,18 +1176,32 @@ app.post('/api/clear-session', (req, res) => {
     });
 });
 
-// 记录用户查询时间（用于30秒限制）
-const userQueryTimes = new Map();
+// 全局查询时间管理（所有用户共享30秒间隔）
+let lastGlobalQueryTime = 0;
 
 // 登录相关API
 
 // 检查登录状态
 app.get('/api/login-status', (req, res) => {
-    res.json({
-        isLoggedIn: loginSession.isLoggedIn,
-        loginTime: loginSession.loginTime,
-        loginMethod: loginSession.loginMethod
-    });
+    const clientIP = getClientIP(req);
+    const userSession = getUserSession(clientIP);
+    
+    if (userSession && userSession.isLoggedIn) {
+        // 更新最后活动时间
+        setUserSession(clientIP, userSession);
+        
+        res.json({
+            isLoggedIn: true,
+            loginTime: userSession.loginTime,
+            loginMethod: userSession.loginMethod
+        });
+    } else {
+        res.json({
+            isLoggedIn: false,
+            loginTime: null,
+            loginMethod: null
+        });
+    }
 });
 
 // 获取二维码登录URL
@@ -1144,6 +1253,7 @@ app.get('/api/qrcode-login', async (req, res) => {
 app.post('/api/check-qrcode-login', async (req, res) => {
     try {
         const { loginLT } = req.body;
+        const clientIP = getClientIP(req);
         
         if (!loginLT) {
             return res.status(400).json({
@@ -1322,9 +1432,14 @@ app.post('/api/check-qrcode-login', async (req, res) => {
                 console.log('✅ 扫码登录成功，电费页面可正常访问');
                 
                 // 登录成功，更新登录状态
-                loginSession.isLoggedIn = true;
-                loginSession.loginTime = getCurrentBeijingDateTime();
-                loginSession.loginMethod = 'qrcode';
+                const clientIP = getClientIP(req);
+                setUserSession(clientIP, {
+                    isLoggedIn: true,
+                    loginTime: getCurrentBeijingDateTime(),
+                    loginMethod: 'qrcode',
+                    username: null,
+                    password: null
+                });
                 
                 res.json({
                     success: true,
@@ -1335,7 +1450,7 @@ app.post('/api/check-qrcode-login', async (req, res) => {
                 setTimeout(async () => {
                     const timeString = getBeijingTimeString();
                     console.log(`\n=== 用户扫码登录成功，执行查询 ${timeString} ===`);
-                    await queryElectricityBalance(true);
+                    await queryElectricityBalance(true, clientIP);
                     
                     const endTimeString = getBeijingTimeString();
                     console.log(`=== ${endTimeString} 查询结束 ===\n`);
@@ -1419,9 +1534,16 @@ app.post('/api/check-qrcode-login', async (req, res) => {
                     const sessionValid = await AuthSession.isSessionValid();
                     
                     if (sessionValid) {
-                        loginSession.isLoggedIn = true;
-                        loginSession.loginTime = getCurrentBeijingDateTime();
-                        loginSession.loginMethod = 'qrcode';
+                        // 获取客户端IP
+                        const clientIP = getClientIP(req);
+                        
+                        // 设置用户会话状态
+                        setUserSession(clientIP, {
+                            isLoggedIn: true,
+                            loginTime: getCurrentBeijingDateTime(),
+                            loginMethod: 'qrcode',
+                            lastActivity: new Date()
+                        });
                         
                         res.json({
                             success: true,
@@ -1430,7 +1552,7 @@ app.post('/api/check-qrcode-login', async (req, res) => {
                         
                         setTimeout(async () => {
                             console.log('\n=== 用户扫码登录成功，执行查询 ===');
-                            await queryElectricityBalance(true);
+                            await queryElectricityBalance(true, clientIP);
                         }, 1000);
                     } else {
                         console.log('重定向登录会话验证失败');
@@ -1473,6 +1595,7 @@ app.post('/api/check-qrcode-login', async (req, res) => {
 app.post('/api/password-login', async (req, res) => {
     try {
         const { username, password } = req.body;
+        const clientIP = getClientIP(req);
         
         if (!username || !password) {
             return res.status(400).json({
@@ -1590,11 +1713,14 @@ app.post('/api/password-login', async (req, res) => {
             
             if (sessionValid) {
                 // 登录成功，更新登录状态并保存用户凭据
-                loginSession.isLoggedIn = true;
-                loginSession.loginTime = getCurrentBeijingDateTime();
-                loginSession.loginMethod = 'password';
-                loginSession.username = username;
-                loginSession.password = password;
+                const clientIP = getClientIP(req);
+                setUserSession(clientIP, {
+                    isLoggedIn: true,
+                    loginTime: getCurrentBeijingDateTime(),
+                    loginMethod: 'password',
+                    username: username,
+                    password: password
+                });
                 
                 console.log('✅ 密码登录成功！');
                 
@@ -1607,7 +1733,7 @@ app.post('/api/password-login', async (req, res) => {
                 setTimeout(async () => {
                     const timeString = getBeijingTimeString();
                     console.log(`\n=== 用户密码登录成功，执行查询 ${timeString} ===`);
-                    await queryElectricityBalance(true);
+                    await queryElectricityBalance(true, clientIP);
                     
                     const endTimeString = getBeijingTimeString();
                     console.log(`=== ${endTimeString} 查询结束 ===\n`);
@@ -1651,11 +1777,8 @@ app.post('/api/password-login', async (req, res) => {
 
 // 登出
 app.post('/api/logout', (req, res) => {
-    loginSession.isLoggedIn = false;
-    loginSession.loginTime = null;
-    loginSession.loginMethod = null;
-    loginSession.username = null;
-    loginSession.password = null;
+    const clientIP = getClientIP(req);
+    deleteUserSession(clientIP);
     
     // 清除会话状态
     AuthSession.invalidate();
@@ -1669,8 +1792,12 @@ app.post('/api/logout', (req, res) => {
 // 手动查询电费余额（需要登录）
 app.get('/api/query', async (req, res) => {
     try {
+        // 获取客户端IP地址
+        const clientIP = getClientIP(req);
+        const userSession = getUserSession(clientIP);
+        
         // 检查登录状态
-        if (!loginSession.isLoggedIn) {
+        if (!userSession || !userSession.isLoggedIn) {
             return res.status(401).json({
                 success: false,
                 error: '请先登录'
@@ -1683,9 +1810,7 @@ app.get('/api/query', async (req, res) => {
         if (!sessionValid) {
             // 会话失效，清除登录状态，提示重新登录
             // 注意：不需要再次调用 invalidate()，因为 isSessionValid() 已经调用过了
-            loginSession.isLoggedIn = false;
-            loginSession.loginTime = null;
-            loginSession.loginMethod = null;
+            deleteUserSession(clientIP);
             
             return res.status(401).json({
                 success: false,
@@ -1693,15 +1818,10 @@ app.get('/api/query', async (req, res) => {
             });
         }
         
-        // 获取客户端IP地址
-        const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 
-                        (req.connection.socket ? req.connection.socket.remoteAddress : null) || 'unknown';
-        
+        // 检查全局30秒限制（所有用户共享）
         const now = Date.now();
-        const lastQueryTime = userQueryTimes.get(clientIP) || 0;
-        const timeSinceLastQuery = now - lastQueryTime;
+        const timeSinceLastQuery = now - lastGlobalQueryTime;
         
-        // 检查30秒限制
         if (timeSinceLastQuery < 30000) {
             const remainingTime = Math.ceil((30000 - timeSinceLastQuery) / 1000);
             return res.status(429).json({
@@ -1712,7 +1832,10 @@ app.get('/api/query', async (req, res) => {
         }
         
         // 记录本次查询时间
-        userQueryTimes.set(clientIP, now);
+        lastGlobalQueryTime = now;
+        
+        // 更新用户最后活动时间
+        setUserSession(clientIP, userSession);
         
         // 使用统一的查询函数进行查询
         try {
@@ -1720,7 +1843,7 @@ app.get('/api/query', async (req, res) => {
             const startTimeString = getBeijingTimeString();
             console.log(`\n=== ${startTimeString} 执行手动查询 ===`);
             
-            const queryResult = await queryElectricityBalance(false); // false表示手动查询
+            const queryResult = await queryElectricityBalance(false, clientIP); // false表示手动查询，传入用户IP
             
             // 添加手动查询结束时间提示
             const endTimeString = getBeijingTimeString();
@@ -1747,11 +1870,7 @@ app.get('/api/query', async (req, res) => {
             
             // 如果是会话相关错误，清除登录状态
             if (queryError.message.includes('会话') || queryError.message.includes('认证') || queryError.message.includes('登录')) {
-                loginSession.isLoggedIn = false;
-                loginSession.loginTime = null;
-                loginSession.loginMethod = null;
-                loginSession.username = null;
-                loginSession.password = null;
+                deleteUserSession(clientIP);
                 AuthSession.invalidate();
                 
                 return res.status(401).json({
@@ -2565,9 +2684,9 @@ cron.schedule('0,30 * * * *', async () => {
     
     console.log(`\n=== [${timeStr}] 定时任务触发 ===`);
     
-    // 检查用户是否已登录
-    if (!loginSession.isLoggedIn) {
-        console.log(`[${timeStr}] 用户未登录，跳过自动查询`);
+    // 检查是否有用户已登录
+    if (!hasAnyLoggedInUser()) {
+        console.log(`[${timeStr}] 没有用户登录，跳过自动查询`);
         console.log(`=== [${timeStr}] 定时任务结束 ===\n`);
         return;
     }
@@ -2576,10 +2695,8 @@ cron.schedule('0,30 * * * *', async () => {
     const sessionValid = await AuthSession.isSessionValid();
     if (!sessionValid) {
         console.log(`[${timeStr}] 用户会话已失效，跳过自动查询`);
-        // 清除登录状态
-        loginSession.isLoggedIn = false;
-        loginSession.loginTime = null;
-        loginSession.loginMethod = null;
+        // 清除所有用户的登录状态
+        userSessions.clear();
         AuthSession.invalidate();
         console.log(`=== [${timeStr}] 定时任务结束 ===\n`);
         return;
@@ -2599,12 +2716,10 @@ cron.schedule('0,30 * * * *', async () => {
     } catch (error) {
         console.error(`[${timeStr}] 定时查询失败:`, error.message);
         
-        // 如果是会话相关错误，清除登录状态
+        // 如果是会话相关错误，清除所有用户的登录状态
         if (error.message.includes('会话') || error.message.includes('认证') || error.message.includes('登录')) {
-            console.log(`[${timeStr}] 会话相关错误，清除登录状态`);
-            loginSession.isLoggedIn = false;
-            loginSession.loginTime = null;
-            loginSession.loginMethod = null;
+            console.log(`[${timeStr}] 会话相关错误，清除所有用户的登录状态`);
+            userSessions.clear();
             AuthSession.invalidate();
         }
     }
@@ -2622,9 +2737,9 @@ cron.schedule('30 59 23 * * *', async () => {
     
     console.log(`\n=== [${timeStr}] 每日收尾查询触发 ===`);
     
-    // 检查用户是否已登录
-    if (!loginSession.isLoggedIn) {
-        console.log(`[${timeStr}] 用户未登录，跳过每日收尾查询`);
+    // 检查是否有用户已登录
+    if (!hasAnyLoggedInUser()) {
+        console.log(`[${timeStr}] 没有用户登录，跳过每日收尾查询`);
         console.log(`=== [${timeStr}] 每日收尾查询结束 ===\n`);
         return;
     }
@@ -2633,10 +2748,8 @@ cron.schedule('30 59 23 * * *', async () => {
     const sessionValid = await AuthSession.isSessionValid();
     if (!sessionValid) {
         console.log(`[${timeStr}] 用户会话已失效，跳过每日收尾查询`);
-        // 清除登录状态
-        loginSession.isLoggedIn = false;
-        loginSession.loginTime = null;
-        loginSession.loginMethod = null;
+        // 清除所有用户的登录状态
+        userSessions.clear();
         AuthSession.invalidate();
         console.log(`=== [${timeStr}] 每日收尾查询结束 ===\n`);
         return;
@@ -2656,12 +2769,10 @@ cron.schedule('30 59 23 * * *', async () => {
     } catch (error) {
         console.error(`[${timeStr}] 每日收尾查询失败:`, error.message);
         
-        // 如果是会话相关错误，清除登录状态
+        // 如果是会话相关错误，清除所有用户的登录状态
         if (error.message.includes('会话') || error.message.includes('认证') || error.message.includes('登录')) {
-            console.log(`[${timeStr}] 会话相关错误，清除登录状态`);
-            loginSession.isLoggedIn = false;
-            loginSession.loginTime = null;
-            loginSession.loginMethod = null;
+            console.log(`[${timeStr}] 会话相关错误，清除所有用户的登录状态`);
+            userSessions.clear();
             AuthSession.invalidate();
         }
     }
