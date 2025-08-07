@@ -1825,7 +1825,6 @@ app.post('/api/password-login', async (req, res) => {
             
         } catch (authError) {
             console.error('CAS认证失败:', authError.message);
-            AuthSession.invalidate();
             
             // 检查是否是认证失败的错误
             if (authError.response && authError.response.status === 401) {
@@ -2762,13 +2761,25 @@ cron.schedule('0,30 * * * *', async () => {
         return;
     }
     
-    // 检查会话有效性
-    const sessionValid = await AuthSession.isSessionValid();
-    if (!sessionValid) {
-        console.log(`[${timeStr}] 用户会话已失效，跳过自动查询`);
-        // 清除所有用户的登录状态
-        userSessions.clear();
-        AuthSession.invalidate();
+    // 查找一个有效的用户会话进行自动查询
+    let validUserFound = false;
+    for (const [userIP, session] of userSessions.entries()) {
+        if (session.isLoggedIn && session.loginMethod === 'password') {
+            const sessionValid = await UserAuthSession.isSessionValid(userIP);
+            if (sessionValid) {
+                validUserFound = true;
+                console.log(`[${timeStr}] 找到有效用户会话: ${userIP}`);
+                break;
+            } else {
+                // 会话失效，清除该用户的登录状态
+                console.log(`[${timeStr}] 用户 ${userIP} 会话已失效，清除登录状态`);
+                deleteUserSession(userIP);
+            }
+        }
+    }
+    
+    if (!validUserFound) {
+        console.log(`[${timeStr}] 没有有效的用户会话，跳过自动查询`);
         console.log(`=== [${timeStr}] 定时任务结束 ===\n`);
         return;
     }
@@ -2815,13 +2826,25 @@ cron.schedule('30 59 23 * * *', async () => {
         return;
     }
     
-    // 检查会话有效性
-    const sessionValid = await AuthSession.isSessionValid();
-    if (!sessionValid) {
-        console.log(`[${timeStr}] 用户会话已失效，跳过每日收尾查询`);
-        // 清除所有用户的登录状态
-        userSessions.clear();
-        AuthSession.invalidate();
+    // 查找一个有效的用户会话进行每日收尾查询
+    let validUserFound = false;
+    for (const [userIP, session] of userSessions.entries()) {
+        if (session.isLoggedIn && session.loginMethod === 'password') {
+            const sessionValid = await UserAuthSession.isSessionValid(userIP);
+            if (sessionValid) {
+                validUserFound = true;
+                console.log(`[${timeStr}] 找到有效用户会话进行收尾查询: ${userIP}`);
+                break;
+            } else {
+                // 会话失效，清除该用户的登录状态
+                console.log(`[${timeStr}] 用户 ${userIP} 会话已失效，清除登录状态`);
+                deleteUserSession(userIP);
+            }
+        }
+    }
+    
+    if (!validUserFound) {
+        console.log(`[${timeStr}] 没有有效的用户会话，跳过每日收尾查询`);
         console.log(`=== [${timeStr}] 每日收尾查询结束 ===\n`);
         return;
     }
