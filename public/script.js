@@ -88,6 +88,54 @@ const Logger = {
     }
 };
 
+// 北京时间格式化工具函数
+const BeijingTime = {
+    // 获取北京时间 Date 对象
+    getBeijingTime(dateInput = null) {
+        let inputDate;
+        if (dateInput) {
+            // 如果输入是字符串，先转换为Date对象
+            inputDate = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+        } else {
+            inputDate = new Date();
+        }
+        
+        // 获取UTC时间戳，然后加上8小时（北京时间UTC+8）
+        const utcTime = inputDate.getTime() + (inputDate.getTimezoneOffset() * 60000);
+        const beijingTime = new Date(utcTime + (8 * 3600000));
+        return beijingTime;
+    },
+    
+    // 格式化为北京时间字符串 (YYYY/M/D HH:mm:ss 格式)
+    formatDateTime(dateInput = null) {
+        const beijingTime = this.getBeijingTime(dateInput);
+        const year = beijingTime.getFullYear();
+        const month = beijingTime.getMonth() + 1;
+        const day = beijingTime.getDate();
+        const hour = String(beijingTime.getHours()).padStart(2, '0');
+        const minute = String(beijingTime.getMinutes()).padStart(2, '0');
+        const second = String(beijingTime.getSeconds()).padStart(2, '0');
+        return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
+    },
+    
+    // 格式化为北京时间日期字符串 (YYYY/M/D 格式)
+    formatDate(dateInput = null) {
+        const beijingTime = this.getBeijingTime(dateInput);
+        const year = beijingTime.getFullYear();
+        const month = beijingTime.getMonth() + 1;
+        const day = beijingTime.getDate();
+        return `${year}/${month}/${day}`;
+    },
+    
+    // 格式化为简短的月日格式 (M/D 格式)
+    formatShortDate(dateInput = null) {
+        const beijingTime = this.getBeijingTime(dateInput);
+        const month = beijingTime.getMonth() + 1;
+        const day = beijingTime.getDate();
+        return `${month}/${day}`;
+    }
+};
+
 let chart;
 let currentRecords = [];
 let allRecords = [];
@@ -151,7 +199,7 @@ function addLoginStatusToHeader(loginInfo) {
         `;
         
         const loginMethod = loginInfo.loginMethod === 'qrcode' ? '扫码登录' : '密码登录';
-        const loginTime = new Date(loginInfo.loginTime).toLocaleString('zh-CN');
+        const loginTime = BeijingTime.formatDateTime(loginInfo.loginTime);
         
         loginStatus.innerHTML = `
             <div style="margin-bottom: 5px;">
@@ -484,7 +532,7 @@ async function queryElectricity() {
             }
             
             balanceAmount.textContent = remainingAmount.toFixed(2);
-            lastQueryTimeEl.textContent = data.queryTime;
+            lastQueryTimeEl.textContent = BeijingTime.formatDateTime(data.queryTime);
             queryStatus.textContent = data.message;
             queryStatus.style.color = '#28a745';
             
@@ -793,11 +841,7 @@ function updateChart() {
                 
                 if (data.chart_data && data.chart_data.length > 0) {
                     const labels = data.chart_data.map(item => {
-                        const date = new Date(item.date);
-                        return date.toLocaleDateString('zh-CN', { 
-                            month: 'short', 
-                            day: 'numeric' 
-                        });
+                        return BeijingTime.formatShortDate(item.date);
                     });
                     const consumptions = data.chart_data.map(item => item.consumption);
                     
@@ -1132,14 +1176,7 @@ function updateChart() {
                             const dataPoint = allData[context[0].dataIndex];
                             if (dataPoint) {
                                 const date = new Date(dataPoint.x);
-                                return date.toLocaleString('zh-CN', {
-                                    year: 'numeric',
-                                    month: '2-digit',
-                                    day: '2-digit',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                    second: '2-digit'
-                                });
+                                return BeijingTime.formatDateTime(date);
                             }
                             return '';
                         },
@@ -1212,7 +1249,7 @@ function updateHistoryTable() {
         
         currentRecords.forEach(record => {
             const row = tbody.insertRow();
-            row.insertCell(0).textContent = new Date(record.date).toLocaleDateString('zh-CN');
+            row.insertCell(0).textContent = BeijingTime.formatDate(record.date);
             
             // 耗电量列：显示耗电量和费用
             const consumptionCell = row.insertCell(1);
@@ -1250,7 +1287,7 @@ function updateHistoryTable() {
             checkboxCell.innerHTML = `<input type="checkbox" class="record-checkbox" data-id="${record.id}">`;
             
             const queryTime = new Date(record.query_time || record.timestamp);
-            row.insertCell(1).textContent = queryTime.toLocaleString('zh-CN');
+            row.insertCell(1).textContent = BeijingTime.formatDateTime(queryTime);
             
             // 剩余电量列，如果是异常数据则标红
             const amountCell = row.insertCell(2);
@@ -1468,7 +1505,7 @@ async function loadStats(updateTodayConsumption = true) {
             const consumptionStats = await consumptionResponse.json();
             
             // 获取选定日期的格式化显示
-            const dateLabel = targetDate ? new Date(targetDate + 'T00:00:00').toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '今日';
+            const dateLabel = targetDate ? BeijingTime.formatShortDate(targetDate + 'T00:00:00') : '今日';
             
             if (avgLabel) avgLabel.textContent = '当日耗电量';
             if (minLabel) minLabel.textContent = '每小时最低耗电量';
@@ -1495,7 +1532,7 @@ async function loadStats(updateTodayConsumption = true) {
                 const todayCard = todayQueries.closest('.stat-card');
                 if (todayCard) {
                     const todayLabel = todayCard.querySelector('h3');
-                    const dateLabel = targetDate ? new Date(targetDate + 'T00:00:00').toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '今日';
+                    const dateLabel = targetDate ? BeijingTime.formatShortDate(targetDate + 'T00:00:00') : '今日';
                     if (todayLabel) todayLabel.textContent = '当日查询次数';
                     todayQueries.textContent = stats.today_queries || '0';
                 }
@@ -1517,7 +1554,7 @@ async function loadStats(updateTodayConsumption = true) {
             // 显示最后一次查询时间（区分手动和自动）
             if (lastQueryTime) {
                 const queryType = (latestData.is_auto === 1 || latestData.is_auto === '1') ? '系统自动查询' : '手动查询';
-                const timeStr = new Date(latestData.query_time).toLocaleString('zh-CN');
+                const timeStr = BeijingTime.formatDateTime(latestData.query_time);
                 lastQueryTime.textContent = `${timeStr} (${queryType})`;
             }
             

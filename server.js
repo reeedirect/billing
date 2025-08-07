@@ -143,10 +143,14 @@ function getClientIP(req) {
            'unknown';
 }
 
-// 清理过期的用户会话（超过24小时未活动）
+// 会话持久化文件路径
+const SESSION_PERSISTENCE_FILE = path.join(__dirname, 'user_sessions.json');
+const AUTH_SESSION_PERSISTENCE_FILE = path.join(__dirname, 'auth_sessions.json');
+
+// 清理过期的用户会话（超过7*24小时未活动）
 function cleanupExpiredSessions() {
     const now = Date.now();
-    const EXPIRE_TIME = 7 * 24 * 60 * 60 * 1000; // 24小时
+    const EXPIRE_TIME = 7 * 24 * 60 * 60 * 1000; // 7*24小时
     
     for (const [ip, session] of userSessions.entries()) {
         if (now - session.lastActivity > EXPIRE_TIME) {
@@ -154,6 +158,75 @@ function cleanupExpiredSessions() {
             userAuthSessions.delete(ip); // 同时清理认证会话
             console.log(`清理过期会话: ${ip}`);
         }
+    }
+}
+
+// 保存用户会话到文件
+function persistUserSessions() {
+    try {
+        const userSessionsData = {
+            timestamp: Date.now(),
+            sessions: Array.from(userSessions.entries())
+        };
+        
+        const authSessionsData = {
+            timestamp: Date.now(),
+            authSessions: Array.from(userAuthSessions.entries())
+        };
+        
+        const fs = require('fs');
+        fs.writeFileSync(SESSION_PERSISTENCE_FILE, JSON.stringify(userSessionsData, null, 2));
+        fs.writeFileSync(AUTH_SESSION_PERSISTENCE_FILE, JSON.stringify(authSessionsData, null, 2));
+        
+        const saveTime = getBeijingTimeString();
+        console.log(`用户会话已保存到文件，保存时间: ${saveTime}, 用户数: ${userSessions.size}`);
+    } catch (error) {
+        console.error('保存用户会话失败:', error.message);
+    }
+}
+
+// 从文件恢复用户会话
+function loadPersistedSessions() {
+    try {
+        const fs = require('fs');
+        
+        // 恢复用户会话
+        if (fs.existsSync(SESSION_PERSISTENCE_FILE)) {
+            const userSessionsData = JSON.parse(fs.readFileSync(SESSION_PERSISTENCE_FILE, 'utf8'));
+            
+            if (userSessionsData.sessions && Array.isArray(userSessionsData.sessions)) {
+                userSessionsData.sessions.forEach(([ip, session]) => {
+                    userSessions.set(ip, session);
+                });
+                
+                const loadTime = getBeijingTimeString();
+                console.log(`用户会话已从文件恢复，恢复时间: ${loadTime}, 恢复用户数: ${userSessions.size}`);
+            }
+        }
+        
+        // 恢复认证会话
+        if (fs.existsSync(AUTH_SESSION_PERSISTENCE_FILE)) {
+            const authSessionsData = JSON.parse(fs.readFileSync(AUTH_SESSION_PERSISTENCE_FILE, 'utf8'));
+            
+            if (authSessionsData.authSessions && Array.isArray(authSessionsData.authSessions)) {
+                authSessionsData.authSessions.forEach(([ip, authSession]) => {
+                    userAuthSessions.set(ip, authSession);
+                });
+                
+                const loadTime = getBeijingTimeString();
+                console.log(`认证会话已从文件恢复，恢复时间: ${loadTime}, 恢复认证会话数: ${userAuthSessions.size}`);
+            }
+        }
+        
+        // 恢复后立即清理过期会话
+        cleanupExpiredSessions();
+        
+        if (userSessions.size > 0 || userAuthSessions.size > 0) {
+            console.log(`会话恢复完成 - 有效用户会话: ${userSessions.size}, 有效认证会话: ${userAuthSessions.size}`);
+        }
+        
+    } catch (error) {
+        console.error('恢复用户会话失败:', error.message);
     }
 }
 
@@ -191,12 +264,24 @@ function setUserSession(ip, sessionData) {
         ...sessionData,
         lastActivity: Date.now()
     });
+    
+    // 异步保存会话（避免阻塞）
+    setImmediate(() => {
+        persistUserSessions();
+    });
 }
 
 // 删除用户会话
 function deleteUserSession(ip) {
     userAuthSessions.delete(ip); // 同时清理认证会话
-    return userSessions.delete(ip);
+    const result = userSessions.delete(ip);
+    
+    // 异步保存会话（避免阻塞）
+    setImmediate(() => {
+        persistUserSessions();
+    });
+    
+    return result;
 }
 
 // 检查是否有任何用户处于登录状态
@@ -234,6 +319,11 @@ const UserAuthSession = {
         
         const saveTime = getBeijingTimeString();
         console.log(`用户 ${userIP} 的认证会话已保存，保存时间: ${saveTime}`);
+        
+        // 异步保存会话（避免阻塞）
+        setImmediate(() => {
+            persistUserSessions();
+        });
     },
     
     // 使用户的认证会话失效
@@ -243,6 +333,11 @@ const UserAuthSession = {
             if (!silent) {
                 console.log(`用户 ${userIP} 的认证会话已失效`);
             }
+            
+            // 异步保存会话（避免阻塞）
+            setImmediate(() => {
+                persistUserSessions();
+            });
         }
     },
     
@@ -1254,6 +1349,116 @@ app.post('/api/clear-session', (req, res) => {
         success: true,
         message: '会话已清除'
     });
+});
+
+// 获取会话持久化状态
+app.get('/api/session-persistence-status', (req, res) => {
+    const fs = require('fs');
+    const currentTime = getBeijingTimeString();
+    
+    try {
+        let userSessionsFileInfo = null;
+        let authSessionsFileInfo = null;
+        
+        // 检查用户会话文件
+        if (fs.existsSync(SESSION_PERSISTENCE_FILE)) {
+            const stats = fs.statSync(SESSION_PERSISTENCE_FILE);
+            const fileContent = JSON.parse(fs.readFileSync(SESSION_PERSISTENCE_FILE, 'utf8'));
+            // 将文件修改时间转换为北京时间
+            const modifiedTime = new Date(stats.mtime.getTime() + 8 * 3600000);
+            const year = modifiedTime.getFullYear();
+            const month = String(modifiedTime.getMonth() + 1).padStart(2, '0');
+            const day = String(modifiedTime.getDate()).padStart(2, '0');
+            const hour = String(modifiedTime.getHours()).padStart(2, '0');
+            const minute = String(modifiedTime.getMinutes()).padStart(2, '0');
+            const second = String(modifiedTime.getSeconds()).padStart(2, '0');
+            
+            userSessionsFileInfo = {
+                exists: true,
+                lastModified: `${year}/${month}/${day} ${hour}:${minute}:${second}`,
+                sessionCount: fileContent.sessions ? fileContent.sessions.length : 0,
+                fileSizeKB: (stats.size / 1024).toFixed(2)
+            };
+        } else {
+            userSessionsFileInfo = {
+                exists: false,
+                lastModified: null,
+                sessionCount: 0,
+                fileSizeKB: 0
+            };
+        }
+        
+        // 检查认证会话文件
+        if (fs.existsSync(AUTH_SESSION_PERSISTENCE_FILE)) {
+            const stats = fs.statSync(AUTH_SESSION_PERSISTENCE_FILE);
+            const fileContent = JSON.parse(fs.readFileSync(AUTH_SESSION_PERSISTENCE_FILE, 'utf8'));
+            // 将文件修改时间转换为北京时间
+            const modifiedTime = new Date(stats.mtime.getTime() + 8 * 3600000);
+            const year = modifiedTime.getFullYear();
+            const month = String(modifiedTime.getMonth() + 1).padStart(2, '0');
+            const day = String(modifiedTime.getDate()).padStart(2, '0');
+            const hour = String(modifiedTime.getHours()).padStart(2, '0');
+            const minute = String(modifiedTime.getMinutes()).padStart(2, '0');
+            const second = String(modifiedTime.getSeconds()).padStart(2, '0');
+            
+            authSessionsFileInfo = {
+                exists: true,
+                lastModified: `${year}/${month}/${day} ${hour}:${minute}:${second}`,
+                authSessionCount: fileContent.authSessions ? fileContent.authSessions.length : 0,
+                fileSizeKB: (stats.size / 1024).toFixed(2)
+            };
+        } else {
+            authSessionsFileInfo = {
+                exists: false,
+                lastModified: null,
+                authSessionCount: 0,
+                fileSizeKB: 0
+            };
+        }
+        
+        res.json({
+            success: true,
+            currentTime: currentTime,
+            memoryStatus: {
+                activeUserSessions: userSessions.size,
+                activeAuthSessions: userAuthSessions.size
+            },
+            fileStatus: {
+                userSessions: userSessionsFileInfo,
+                authSessions: authSessionsFileInfo
+            },
+            config: {
+                expireTimeHours: 7 * 24,
+                persistenceIntervalHours: 6
+            }
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            currentTime: currentTime
+        });
+    }
+});
+
+// 手动触发会话持久化保存
+app.post('/api/save-sessions', (req, res) => {
+    try {
+        persistUserSessions();
+        res.json({
+            success: true,
+            message: '会话保存完成',
+            sessionCount: userSessions.size,
+            authSessionCount: userAuthSessions.size,
+            saveTime: getBeijingTimeString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
 // 全局查询时间管理（所有用户共享30秒间隔）
@@ -2919,6 +3124,24 @@ cron.schedule('0 2 * * *', async () => {
     timezone: "Asia/Shanghai"
 });
 
+// 设置定时任务 - 每6小时保存用户会话状态
+cron.schedule('0 */6 * * *', () => {
+    const timeStr = getBeijingTimeString();
+    console.log(`\n=== [${timeStr}] 定时保存用户会话任务触发 ===`);
+    
+    try {
+        persistUserSessions();
+        console.log(`[${timeStr}] 用户会话定时保存完成 - 用户数: ${userSessions.size}, 认证会话数: ${userAuthSessions.size}`);
+    } catch (error) {
+        console.error(`[${timeStr}] 用户会话定时保存失败:`, error.message);
+    }
+    
+    console.log(`=== [${timeStr}] 定时保存用户会话任务结束 ===\n`);
+}, {
+    scheduled: true,
+    timezone: "Asia/Shanghai"
+});
+
 // 全局错误处理器
 app.use((err, req, res, next) => {
     ApiResponse.error(res, err);
@@ -2928,12 +3151,20 @@ app.use((err, req, res, next) => {
 function startServer(port) {
     const now = getBeijingTime();
     const timeStr = getBeijingTimeString();
+    
+    // 在服务器启动时恢复用户会话
+    console.log(`\n=== 服务器启动中 ===`);
+    console.log(`正在恢复用户会话...`);
+    loadPersistedSessions();
+    
     const server = app.listen(port, () => {
         console.log(`\n=== 电费查询系统启动 ===`);
         console.log(`服务器启动时间: ${timeStr}`);
         console.log(`服务器地址: http://localhost:${port}`);
         console.log(`定时查询: 每半小时 (0,30 * * * *)`);
+        console.log(`定时保存会话: 每6小时 (0 */6 * * *)`);
         console.log(`每天凌晨2点自动备份`);
+        console.log(`会话过期时间: ${7 * 24}小时`);
         console.log(`请先登录后开始使用`);
         console.log(`========================\n`);
     });
@@ -2960,13 +3191,50 @@ module.exports = {
 
 // 优雅关闭
 process.on('SIGINT', () => {
-    console.log('正在关闭服务器...');
+    const timeStr = getBeijingTimeString();
+    console.log(`\n[${timeStr}] 正在关闭服务器...`);
+    
+    // 保存用户会话状态
+    try {
+        persistUserSessions();
+        console.log(`[${timeStr}] 用户会话已保存 - 用户数: ${userSessions.size}, 认证会话数: ${userAuthSessions.size}`);
+    } catch (error) {
+        console.error(`[${timeStr}] 保存用户会话失败:`, error.message);
+    }
+    
+    // 关闭数据库连接
     db.close((err) => {
         if (err) {
             console.error(err.message);
         } else {
-            console.log('数据库连接已关闭');
+            console.log(`[${timeStr}] 数据库连接已关闭`);
         }
+        console.log(`[${timeStr}] 服务器已关闭`);
+        process.exit(0);
     });
-    process.exit(0);
+});
+
+// 处理其他关闭信号
+process.on('SIGTERM', () => {
+    const timeStr = getBeijingTimeString();
+    console.log(`\n[${timeStr}] 收到SIGTERM信号，正在关闭服务器...`);
+    
+    // 保存用户会话状态
+    try {
+        persistUserSessions();
+        console.log(`[${timeStr}] 用户会话已保存 - 用户数: ${userSessions.size}, 认证会话数: ${userAuthSessions.size}`);
+    } catch (error) {
+        console.error(`[${timeStr}] 保存用户会话失败:`, error.message);
+    }
+    
+    // 关闭数据库连接
+    db.close((err) => {
+        if (err) {
+            console.error(err.message);
+        } else {
+            console.log(`[${timeStr}] 数据库连接已关闭`);
+        }
+        console.log(`[${timeStr}] 服务器已关闭`);
+        process.exit(0);
+    });
 });
