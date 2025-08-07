@@ -2342,12 +2342,38 @@ function bindSliderEvents() {
         e.stopPropagation();
     });
     
+    // 触摸事件支持 - 范围条
+    newSliderRange.addEventListener('touchstart', (e) => {
+        if (e.target === newLeftHandle || e.target === newRightHandle) {
+            return;
+        }
+        
+        Logger.timeline.debug('👆 开始触摸拖拽范围条');
+        timeRangeData.isDragging = true;
+        timeRangeData.dragType = 'range';
+        timeRangeData.lastMouseX = e.touches[0].clientX;
+        newSliderRange.classList.add('dragging');
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    
     // 拖拽左边控制点（调整开始时间）
     newLeftHandle.addEventListener('mousedown', (e) => {
         Logger.timeline.debug('👈 开始拖拽左控制点');
         timeRangeData.isDragging = true;
         timeRangeData.dragType = 'left';
         timeRangeData.lastMouseX = e.clientX;
+        newLeftHandle.classList.add('dragging');
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    
+    // 触摸事件支持 - 左控制点
+    newLeftHandle.addEventListener('touchstart', (e) => {
+        Logger.timeline.debug('👈 开始触摸拖拽左控制点');
+        timeRangeData.isDragging = true;
+        timeRangeData.dragType = 'left';
+        timeRangeData.lastMouseX = e.touches[0].clientX;
         newLeftHandle.classList.add('dragging');
         e.preventDefault();
         e.stopPropagation();
@@ -2364,6 +2390,17 @@ function bindSliderEvents() {
         e.stopPropagation();
     });
     
+    // 触摸事件支持 - 右控制点
+    newRightHandle.addEventListener('touchstart', (e) => {
+        Logger.timeline.debug('👉 开始触摸拖拽右控制点');
+        timeRangeData.isDragging = true;
+        timeRangeData.dragType = 'right';
+        timeRangeData.lastMouseX = e.touches[0].clientX;
+        newRightHandle.classList.add('dragging');
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    
     // 全局鼠标移动事件（只绑定一次）
     if (!window.sliderMouseMoveHandler) {
         Logger.timeline.debug('🌐 绑定全局鼠标移动事件');
@@ -2373,6 +2410,15 @@ function bindSliderEvents() {
         Logger.timeline.debug('✅ 全局鼠标移动事件已存在');
     }
     
+    // 全局触摸移动事件（只绑定一次）
+    if (!window.sliderTouchMoveHandler) {
+        Logger.timeline.debug('🌐 绑定全局触摸移动事件');
+        window.sliderTouchMoveHandler = handleSliderTouchMove;
+        document.addEventListener('touchmove', window.sliderTouchMoveHandler, { passive: false });
+    } else {
+        Logger.timeline.debug('✅ 全局触摸移动事件已存在');
+    }
+    
     // 全局鼠标释放事件（只绑定一次）
     if (!window.sliderMouseUpHandler) {
         Logger.timeline.debug('🌐 绑定全局鼠标释放事件');
@@ -2380,6 +2426,15 @@ function bindSliderEvents() {
         document.addEventListener('mouseup', window.sliderMouseUpHandler);
     } else {
         Logger.timeline.debug('✅ 全局鼠标释放事件已存在');
+    }
+    
+    // 全局触摸结束事件（只绑定一次）
+    if (!window.sliderTouchEndHandler) {
+        Logger.timeline.debug('🌐 绑定全局触摸结束事件');
+        window.sliderTouchEndHandler = handleSliderTouchEnd;
+        document.addEventListener('touchend', window.sliderTouchEndHandler);
+    } else {
+        Logger.timeline.debug('✅ 全局触摸结束事件已存在');
     }
     
     Logger.timeline.info('✨ 滑块事件绑定完成');
@@ -2473,6 +2528,109 @@ function handleSliderMouseUp(e) {
     if (!timeRangeData.isDragging) return;
     
     Logger.timeline.debug('结束拖拽', timeRangeData.dragType);
+    
+    timeRangeData.isDragging = false;
+    timeRangeData.dragType = null;
+    
+    // 移除拖拽样式
+    const sliderRange = document.getElementById('sliderRange');
+    const leftHandle = document.getElementById('leftHandle');
+    const rightHandle = document.getElementById('rightHandle');
+    
+    if (sliderRange) sliderRange.classList.remove('dragging');
+    if (leftHandle) leftHandle.classList.remove('dragging');
+    if (rightHandle) rightHandle.classList.remove('dragging');
+}
+
+// 处理滑块触摸移动
+function handleSliderTouchMove(e) {
+    if (!timeRangeData.isDragging) return;
+    
+    Logger.timeline.debug('📱 触摸移动处理中，拖拽类型:', timeRangeData.dragType);
+    
+    const sliderTrack = document.querySelector('.slider-track');
+    if (!sliderTrack) {
+        Logger.timeline.error('❌ 找不到滑块轨道元素');
+        return;
+    }
+    
+    const rect = sliderTrack.getBoundingClientRect();
+    const currentX = e.touches[0].clientX;
+    const deltaX = currentX - timeRangeData.lastMouseX;
+    const trackWidth = rect.width;
+    const totalTimeRange = timeRangeData.endTime - timeRangeData.startTime;
+    const deltaTime = (deltaX / trackWidth) * totalTimeRange;
+    
+    Logger.timeline.debug('📱 触摸移动计算: deltaX=', deltaX, 'deltaTime=', deltaTime);
+    
+    switch (timeRangeData.dragType) {
+        case 'range':
+            // 移动整个视图窗口
+            let newStart = timeRangeData.viewStart - deltaTime;
+            let newEnd = timeRangeData.viewEnd - deltaTime;
+            
+            const currentViewRange = timeRangeData.viewEnd - timeRangeData.viewStart;
+            
+            // 边界检查
+            if (newStart < timeRangeData.startTime) {
+                newStart = timeRangeData.startTime;
+                newEnd = newStart + currentViewRange;
+            }
+            if (newEnd > timeRangeData.endTime) {
+                newEnd = timeRangeData.endTime;
+                newStart = newEnd - currentViewRange;
+            }
+            
+            timeRangeData.viewStart = newStart;
+            timeRangeData.viewEnd = newEnd;
+            break;
+            
+        case 'left':
+            // 调整开始时间（缩放）
+            let newViewStart = timeRangeData.viewStart + deltaTime;
+            
+            // 限制最小范围（30分钟）和最大范围
+            const minRange = 30 * 60 * 1000; // 30分钟
+            if (newViewStart < timeRangeData.startTime) {
+                newViewStart = timeRangeData.startTime;
+            }
+            if (timeRangeData.viewEnd - newViewStart < minRange) {
+                newViewStart = timeRangeData.viewEnd - minRange;
+            }
+            
+            timeRangeData.viewStart = newViewStart;
+            break;
+            
+        case 'right':
+            // 调整结束时间（缩放）
+            let newViewEnd = timeRangeData.viewEnd + deltaTime;
+            
+            // 限制最小范围（30分钟）和最大范围
+            const minRangeRight = 30 * 60 * 1000; // 30分钟
+            if (newViewEnd > timeRangeData.endTime) {
+                newViewEnd = timeRangeData.endTime;
+            }
+            if (newViewEnd - timeRangeData.viewStart < minRangeRight) {
+                newViewEnd = timeRangeData.viewStart + minRangeRight;
+            }
+            
+            timeRangeData.viewEnd = newViewEnd;
+            break;
+    }
+    
+    timeRangeData.lastMouseX = currentX;
+    updateSliderDisplay();
+    updateChartTimeRange();
+    
+    // 阻止页面滚动
+    e.preventDefault();
+}
+
+// 处理滑块触摸结束
+function handleSliderTouchEnd(e) {
+    if (!timeRangeData.isDragging) return;
+    
+    Logger.timeline.debug('📱 结束触摸拖拽', timeRangeData.dragType);
     
     timeRangeData.isDragging = false;
     timeRangeData.dragType = null;

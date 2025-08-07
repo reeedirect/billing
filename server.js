@@ -237,7 +237,7 @@ function getUserSession(ip) {
 }
 
 // 创建或更新用户会话
-function setUserSession(ip, sessionData) {
+function setUserSession(ip, sessionData, skipPersistence = false) {
     cleanupExpiredSessions();
     
     // 如果是新用户且已达到最大用户数限制
@@ -265,10 +265,12 @@ function setUserSession(ip, sessionData) {
         lastActivity: Date.now()
     });
     
-    // 异步保存会话（避免阻塞）
-    setImmediate(() => {
-        persistUserSessions();
-    });
+    // 只在非跳过持久化时才异步保存会话
+    if (!skipPersistence) {
+        setImmediate(() => {
+            persistUserSessions();
+        });
+    }
 }
 
 // 删除用户会话
@@ -1472,8 +1474,8 @@ app.get('/api/login-status', (req, res) => {
     const userSession = getUserSession(clientIP);
     
     if (userSession && userSession.isLoggedIn) {
-        // 更新最后活动时间
-        setUserSession(clientIP, userSession);
+        // 更新最后活动时间，但不触发持久化保存（避免冗余输出）
+        setUserSession(clientIP, userSession, true);
         
         res.json({
             isLoggedIn: true,
@@ -2909,13 +2911,14 @@ app.get('/api/last-auto-query', (req, res) => {
         }
         
         if (row) {
-            // 格式化时间为北京时间
+            // 使用已有的北京时间工具函数
             const date = new Date(row.query_time);
-            // 转换为北京时间显示
-            const beijingTime = new Date(date.getTime() + (8 * 3600000 - date.getTimezoneOffset() * 60000));
+            // 获取UTC时间戳，然后加上8小时（北京时间UTC+8）
+            const utcTime = date.getTime() + (date.getTimezoneOffset() * 60000);
+            const beijingTime = new Date(utcTime + (8 * 3600000));
             const year = beijingTime.getFullYear();
-            const month = String(beijingTime.getMonth() + 1).padStart(2, '0');
-            const day = String(beijingTime.getDate()).padStart(2, '0');
+            const month = beijingTime.getMonth() + 1;
+            const day = beijingTime.getDate();
             const hour = String(beijingTime.getHours()).padStart(2, '0');
             const minute = String(beijingTime.getMinutes()).padStart(2, '0');
             const second = String(beijingTime.getSeconds()).padStart(2, '0');
