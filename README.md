@@ -1,148 +1,220 @@
-# 电费余额查询系统
+# Electricity Balance Monitoring System
 
-这是一个自动监控学生公寓电费余额的Web应用系统。
+A Node.js + Express + SQLite web application that monitors and records dormitory electricity balance with automatic polling, multi-user (IP–scoped) session management, and statistical analysis.
 
-## 功能特点
+## Core Features
 
-- **自动查询**: 每小时自动查询一次电费余额
-- **实时监控**: 显示当前剩余电量和查询## 🔧 故障排除
+- Half‑hour automatic balance query.
+- Manual query with global throttle (30 s shared cooldown across all users).
+- Multi-user session isolation by client IP (max 5 concurrent logged-in users; oldest inactive removed when exceeding limit).
+- Dual authentication:
+  - Password login (auto re-auth if session expires; stored per user in session object).
+  - QR code (CAS) login (requires user to re-scan when session expires).
+- Session persistence across restarts (JSON files) with 7×24 h expiry:
+  - user_sessions.json
+  - auth_sessions.json
+  - Auto save every 6 hours + on first login + graceful shutdown.
+- Unified UTC+8 Time utilities (DB storage and UI display aligned).
+- Rich statistics:
+  - Daily min / max / avg / query count
+  - Consumption deltas
+  - Hourly derived consumption
+  - Last automatic query endpoint
+- Data backup & restore (backup tables, drop all backups, restore from selected).
+- Admin controls (password-gated): delete selected rows, clear old data, backup/restore.
+- Mobile responsive layout (inputs compressed to one row, stats in 2-column grid, touch-enabled range slider).
+- Frontend charting & history views (daily list vs aggregated view).
+- Font customization: numeric metrics rendered with a unique font.
 
-### 端口被占用 (EADDRINUSE)
-- **问题**: 提示端口3000被占用
-- **解决**: 系统会自动寻找可用端口（3001, 3002...）
-- **手动解决**: 运行 `检查端口.bat` 查看端口使用情况
+## Technology Stack
 
-### 查询失败
-- 检查网络连接
-- 确认学校网站是否正常
-- 查看控制台错误日志
+| Layer      | Tech |
+|-----------|------|
+| Backend   | Node.js (Express), sqlite3 |
+| Frontend  | Vanilla JS, HTML, CSS |
+| Scheduling| node-cron / setInterval (half-hour + daily tasks) |
+| Persistence| JSON session files + SQLite database |
 
-### Node.js未找到
-- **问题**: 提示 'node' is not recognized
-- **解决**: 安装Node.js并确保添加到系统PATH
-- **检查**: 运行 `环境检查.bat` 检查环境
+## Data Model (electricity_records)
 
-### 数据不更新
-- 检查定时任务是否正常运行
-- 查看服务器日志
-- 确认数据库文件权限
+| Column            | Type        | Notes |
+|-------------------|-------------|-------|
+| id                | INTEGER PK  | Auto increment |
+| timestamp         | DATETIME    | Default current (DB) |
+| remaining_amount  | REAL        | Current balance (kWh) |
+| query_time        | TEXT        | UTC+8 time string (YYYY-MM-DD HH:mm:ss) |
+| is_auto           | INTEGER     | 1 = automatic, 0 = manual |
 
-### 页面显示异常
-- 清除浏览器缓存
-- 检查JavaScript控制台错误
-- 确认API接口正常响应提供详细的使用统计信息
-- **趋势图表**: 按天显示电费使用折线图
-- **历史记录**: 查看过去几天的电费使用情况
-- **响应式设计**: 支持移动端访问
+Backup tables are cloned snapshots (naming convention defined in code).
 
-## 技术栈
+## Authentication Flow
 
-### 后端
-- Node.js + Express
-- SQLite 数据库
-- Axios (HTTP 请求)
-- Cheerio (HTML 解析)
-- node-cron (定时任务)
+Password Login:
+1. Fetch CAS login page.
+2. Parse hidden fields.
+3. Submit credentials.
+4. Follow redirects to electricity endpoint.
+5. Persist cookies + JSESSIONID under user IP.
+6. Re-auth automatically on session invalidation.
 
-### 前端
-- HTML5 + CSS3
-- JavaScript (ES6+)
-- Chart.js (图表库)
-- 响应式设计
+QR Login:
+1. Poll CAS QR status endpoint.
+2. When "success", follow redirect chain.
+3. Validate electricity page (title check).
+4. Store session; on invalidation prompt user to login again.
 
-## 安装和运行
+Session Validation:
+- Page title inspection (detect redirect to login).
+- On invalidation (password users) attempt re-auth if stored credentials exist.
+- QR users are instructed to re-login.
 
-### 1. 安装依赖
+## API (Representative)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | /api/query | Manual query (throttled) |
+| POST | /api/password-login | Password auth |
+| POST | /api/check-qrcode-login | QR poll |
+| GET | /api/login-status | Per-IP login state |
+| GET | /api/session-status | Auth session validity |
+| POST | /api/clear-session | Invalidate current user |
+| GET | /api/last-auto-query | Last auto run (UTC+8 time) |
+| GET | /api/stats/today | Daily aggregate stats |
+| GET | /api/stats/consumption | Detailed consumption calc |
+| GET | /api/debug/sessions | Diagnostic session snapshot |
+| POST | /api/backups | Create backup (if implemented) |
+| GET | /api/backups | List backups |
+| POST | /api/backups/restore | Restore |
+| DELETE | /api/backups | Drop backups |
+
+(Exact payloads: see server.js for current schema.)
+
+## Rate Limiting / Scheduling
+
+- Global manual query cooldown: 30 seconds (affects all users).
+- Automatic interval: every 30 minutes (only runs once if ≥1 user logged in).
+- Daily tasks (e.g. backup, summary) scheduled via cron.
+- Session persistence save: every 6 hours.
+
+## File Overview
+
+| File | Description |
+|------|-------------|
+| server.js | Core server, authentication, scheduling, APIs |
+| electricity.db | SQLite database |
+| public/index.html | Main UI |
+| public/login.html | Login UI |
+| public/script.js | Frontend logic (query, charts, responsive handling) |
+| public/style.css | Styles + responsive + font |
+| public/xxx.ttf | Numeric display font |
+| user_sessions.json | Persisted user session state |
+| auth_sessions.json | Persisted auth (cookies, jsessionid) |
+
+## Installation
+
 ```bash
+git clone <repo>
+cd billing
 npm install
+# Optional: set production mode
+set NODE_ENV=production       # Windows
+# or
+export NODE_ENV=production    # Linux
+node server.js
 ```
 
-### 2. 启动服务
+Visit: http://localhost:3000 (adjust if port auto-increments)
+
+## PM2 Deployment (Linux / Ubuntu)
+
 ```bash
-npm start
+npm install -g pm2
+pm2 start server.js --name billing
+pm2 save
+pm2 startup
+pm2 restart billing
 ```
 
-或者开发模式：
-```bash
-npm run dev
-```
+Ensure the working directory is writable (for session JSON + DB).
 
-### 3. 访问应用
-打开浏览器访问: http://localhost:3000
-
-## 系统配置
-
-系统已预配置以下信息：
-- **查询网址**: http://202.195.206.214/epay/electric/load4electricbill?elcsysid=2
-- **用户账号**: 232241821136
-- **用户密码**: 3.1415926QweAsd
-- **缴费楼栋**: 学生公寓C14
-- **缴费楼层**: 学生公寓C14四层
-- **缴费房间**: C14-418
-
-## API 接口
-
-### GET /api/query
-手动查询电费余额
-
-### GET /api/history?days=7
-获取历史记录（默认7天）
-
-### GET /api/today
-获取今日详细查询记录
-
-### GET /api/stats
-获取统计信息
-
-## 数据库结构
-
-```sql
-CREATE TABLE electricity_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    remaining_amount REAL,
-    query_time TEXT
-);
-```
-
-## 项目结构
+## Reverse Proxy (Nginx Example)
 
 ```
-billing/
-├── server.js              # 后端服务器
-├── package.json           # 项目配置
-├── electricity.db         # SQLite数据库(运行时生成)
-└── public/                # 前端文件
-    ├── index.html         # 主页面
-    ├── style.css          # 样式文件
-    └── script.js          # 前端脚本
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
 ```
 
-## 注意事项
+## Configuration
 
-1. **网络连接**: 确保能够访问学校内网
-2. **认证信息**: 系统使用预设的统一身份认证信息
-3. **查询频率**: 系统每小时自动查询一次，避免频繁请求
-4. **数据存储**: 所有查询记录保存在本地SQLite数据库中
-5. **错误处理**: 系统具备完善的错误处理和重试机制
+Edit ELECTRICITY_CONFIG in server.js:
+- casLoginUrl
+- electricityUrl
+- building / floor / room labels (UI only)
 
-## 故障排除
+## Mobile Optimization
 
-### 查询失败
-- 检查网络连接
-- 确认学校网站是否正常
-- 查看控制台错误日志
+- Single-row building/floor/room selectors with ellipsis overflow.
+- Stats grid: 2 columns.
+- Touch-enabled slider controls (drag handles responsive on narrow screens).
+- Numeric font applied to key metrics only.
 
-### 数据不更新
-- 检查定时任务是否正常运行
-- 查看服务器日志
-- 确认数据库文件权限
+## Backup & Restore
 
-### 页面显示异常
-- 清除浏览器缓存
-- 检查JavaScript控制台错误
-- 确认API接口正常响应
+Backup endpoints manipulate snapshot tables. Use admin password (handled frontend) to enable backup/restore UI. Logs track each backup operation timestamp (UTC+8 Time).
 
-## 许可证
+## Logging Conventions
 
-MIT License
+- Manual query boundaries with timestamp markers.
+- Session save / restore actions.
+- Authentication stages (CAS steps labeled).
+- Session invalidation reasons.
+
+## Persistence & Expiry
+
+- Session expiry: 7 days inactivity.
+- On restart: load JSON, discard expired entries, log restored counts.
+- Invalidation removes both logical & auth session entries.
+
+## Security Notes
+
+- Password credentials stored in session object (plain) only to support auto re-auth; consider hashing or encrypting if security context requires.
+- Do not commit user_sessions.json or auth_sessions.json to public repos.
+- Use HTTPS + reverse proxy in production.
+
+## Development Tips
+
+- Use /api/debug/sessions to inspect state.
+- Add temporary console logs for deeper tracing.
+- Keep font assets small for mobile performance.
+
+## Human Contributions
+
+- Discovered and documented the target CAS and electricity endpoints.
+- Provided real operational credentials & test scenarios (password vs QR flows).
+- Reported functional issues (timezone drift, multi-user contamination, session invalidation duplication).
+- Defined UI layout expectations (mobile one-row selectors, stats 2-column grid, chart interactions).
+- Chose numeric font and visual formatting style.
+- Validated multi-user edge cases (logout / refresh / restart with persistence).
+- Supplied production deployment constraints (PM2 usage, restart resilience).
+- Iteratively verified fixes and clarified functional intent (e.g., shared global throttle, single auto query run).
+
+## AI Involvement
+
+An AI assistant (GitHub Copilot) helped:
+- Refactoring authentication & session isolation (per-IP maps, persistence).
+- Designing re-auth logic for password users and graceful prompts for QR users.
+- Implementing UTC+8 Time normalization utilities.
+- Adding session persistence (JSON) with expiry + periodic save.
+- Improving error handling & log consistency.
+- Enhancing responsive layout & touch slider logic.
+
+All final behavior decisions and validation were performed by the human maintainer.
+
+## License
+
+Distributed under the GPLv3 License. See LICENSE for more information.

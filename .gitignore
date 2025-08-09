@@ -1,4 +1,8 @@
+electricity.db
+dont/
+public/CSL2.ttf
+.vscode/
+.git/
 node_modules/
+npm-debug.log
 .env
-*.log
-dist/
